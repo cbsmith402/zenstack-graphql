@@ -5,8 +5,14 @@ import type {
     NormalizedEnumDefinition,
     NormalizedFieldDefinition,
     NormalizedModelDefinition,
+    NormalizedProcedureDefinition,
+    NormalizedProcedureParamDefinition,
     NormalizedSchema,
+    NormalizedTypeDefDefinition,
+    ProcedureDefinition,
     ProviderCapabilities,
+    ProcedureTypeKind,
+    TypeDefDefinition,
     UniqueConstraintDefinition,
     ZenStackSchemaLike,
 } from './types.js';
@@ -45,6 +51,8 @@ function normalizeField(
     fieldName: string,
     field: FieldDefinition | Record<string, unknown>,
     enumNames: Set<string>,
+    typeDefNames: Set<string>,
+    modelNames: Set<string>,
     uniqueFieldNames: Set<string>
 ): NormalizedFieldDefinition {
     const generatedField = field as Record<string, unknown>;
@@ -55,6 +63,10 @@ function normalizeField(
               ? 'relation'
               : enumNames.has(String(generatedField.type))
                 ? 'enum'
+                : typeDefNames.has(String(generatedField.type))
+                  ? 'typeDef'
+                : modelNames.has(String(generatedField.type))
+                  ? 'relation'
                 : 'scalar';
 
     const relation = isPlainObject(generatedField.relation) ? generatedField.relation : undefined;
@@ -109,14 +121,18 @@ function normalizeField(
 function normalizeFields(
     fields: ModelDefinition['fields'],
     enumNames: Set<string>,
+    typeDefNames: Set<string>,
+    modelNames: Set<string>,
     uniqueFieldNames: Set<string>
 ): NormalizedFieldDefinition[] {
     if (Array.isArray(fields)) {
-        return fields.map((field) => normalizeField(field.name, field, enumNames, uniqueFieldNames));
+        return fields.map((field) =>
+            normalizeField(field.name, field, enumNames, typeDefNames, modelNames, uniqueFieldNames)
+        );
     }
 
     return Object.entries(fields).map(([fieldName, field]) =>
-        normalizeField(fieldName, field, enumNames, uniqueFieldNames)
+        normalizeField(fieldName, field, enumNames, typeDefNames, modelNames, uniqueFieldNames)
     );
 }
 
@@ -145,14 +161,16 @@ function normalizeUniqueConstraints(
 function normalizeModel(
     modelName: string,
     model: ModelDefinition & Record<string, unknown>,
-    enumNames: Set<string>
+    enumNames: Set<string>,
+    typeDefNames: Set<string>,
+    modelNames: Set<string>
 ): NormalizedModelDefinition {
     const generatedUniqueFields = isPlainObject(model.uniqueFields) ? model.uniqueFields : undefined;
     const generatedUniqueConstraints = generatedUniqueFields
         ? Object.keys(generatedUniqueFields).map((fieldName) => ({ fields: [fieldName] }))
         : undefined;
     const uniqueFieldNames = new Set(Object.keys(generatedUniqueFields ?? {}));
-    const fields = normalizeFields(model.fields, enumNames, uniqueFieldNames);
+    const fields = normalizeFields(model.fields, enumNames, typeDefNames, modelNames, uniqueFieldNames);
     const uniqueConstraints = normalizeUniqueConstraints(
         fields,
         model.uniqueConstraints ?? generatedUniqueConstraints
@@ -175,6 +193,97 @@ function normalizeModel(
     };
 }
 
+function normalizeTypeDef(
+    typeDefName: string,
+    typeDef: TypeDefDefinition & Record<string, unknown>,
+    enumNames: Set<string>,
+    typeDefNames: Set<string>,
+    modelNames: Set<string>
+): NormalizedTypeDefDefinition {
+    const fields = normalizeFields(
+        typeDef.fields,
+        enumNames,
+        typeDefNames,
+        modelNames,
+        new Set<string>()
+    );
+    return {
+        name: typeDef.name ?? typeDefName,
+        description: typeDef.description,
+        fields,
+        fieldMap: new Map(fields.map((field) => [field.name, field])),
+    };
+}
+
+function resolveProcedureTypeKind(
+    type: string,
+    enumNames: Set<string>,
+    typeDefNames: Set<string>,
+    modelNames: Set<string>
+): ProcedureTypeKind {
+    if (enumNames.has(type)) {
+        return 'enum';
+    }
+    if (typeDefNames.has(type)) {
+        return 'typeDef';
+    }
+    if (modelNames.has(type)) {
+        return 'model';
+    }
+    return 'scalar';
+}
+
+function normalizeProcedureParams(
+    params: ProcedureDefinition['params'],
+    enumNames: Set<string>,
+    typeDefNames: Set<string>,
+    modelNames: Set<string>
+): NormalizedProcedureParamDefinition[] {
+    const entries = Array.isArray(params)
+        ? params
+        : Object.entries(params ?? {}).map(([paramName, param]) => ({
+              name: paramName,
+              ...(param as Record<string, unknown>),
+          }));
+
+    return entries.map((param) => {
+        const raw = param as Record<string, unknown>;
+        const type = String(raw.type);
+        return {
+            name: String(raw.name),
+            type,
+            kind: resolveProcedureTypeKind(type, enumNames, typeDefNames, modelNames),
+            isList:
+                ('isList' in raw && typeof raw.isList === 'boolean'
+                    ? raw.isList
+                    : Boolean(raw.array)),
+            isNullable:
+                ('isNullable' in raw && typeof raw.isNullable === 'boolean'
+                    ? raw.isNullable
+                    : Boolean(raw.optional)),
+        };
+    });
+}
+
+function normalizeProcedure(
+    procedureName: string,
+    procedure: ProcedureDefinition & Record<string, unknown>,
+    enumNames: Set<string>,
+    typeDefNames: Set<string>,
+    modelNames: Set<string>
+): NormalizedProcedureDefinition {
+    const returnType = String(procedure.returnType);
+    return {
+        name: procedure.name ?? procedureName,
+        description: procedure.description,
+        params: normalizeProcedureParams(procedure.params, enumNames, typeDefNames, modelNames),
+        returnType,
+        returnKind: resolveProcedureTypeKind(returnType, enumNames, typeDefNames, modelNames),
+        returnArray: Boolean(procedure.returnArray),
+        mutation: Boolean(procedure.mutation),
+    };
+}
+
 function normalizeEnum(enumName: string, enumDefinition: EnumDefinition): NormalizedEnumDefinition {
     const values = Array.isArray(enumDefinition.values)
         ? enumDefinition.values
@@ -193,6 +302,8 @@ export function normalizeSchema(schema: ZenStackSchemaLike | ModelDefinition[]):
 
     const modelsRaw = schemaInput.models ?? schemaInput.modelMeta;
     const enumsRaw = schemaInput.enums ?? schemaInput.enumMeta;
+    const typeDefsRaw = schemaInput.typeDefs ?? schemaInput.typeDefMeta;
+    const proceduresRaw = schemaInput.procedures ?? schemaInput.procedureMeta;
 
     const enums = Array.isArray(enumsRaw)
         ? enumsRaw.map((entry) => normalizeEnum(entry.name, entry as EnumDefinition))
@@ -200,15 +311,73 @@ export function normalizeSchema(schema: ZenStackSchemaLike | ModelDefinition[]):
               normalizeEnum(enumName, { ...(entry as EnumDefinition), name: enumName })
           );
     const enumNames = new Set(enums.map((entry) => entry.name));
+    const rawModelNames = new Set(
+        Array.isArray(modelsRaw)
+            ? modelsRaw.map((entry) => entry.name)
+            : Object.keys(modelsRaw ?? {})
+    );
+    const rawTypeDefNames = new Set(
+        Array.isArray(typeDefsRaw)
+            ? typeDefsRaw.map((entry) => entry.name)
+            : Object.keys(typeDefsRaw ?? {})
+    );
+    const typeDefs = Array.isArray(typeDefsRaw)
+        ? typeDefsRaw.map((entry) =>
+              normalizeTypeDef(
+                  entry.name,
+                  entry as TypeDefDefinition & Record<string, unknown>,
+                  enumNames,
+                  rawTypeDefNames,
+                  rawModelNames
+              )
+          )
+        : Object.entries(typeDefsRaw ?? {}).map(([typeDefName, entry]) =>
+              normalizeTypeDef(
+                  typeDefName,
+                  { ...(entry as TypeDefDefinition), name: typeDefName } as TypeDefDefinition & Record<string, unknown>,
+                  enumNames,
+                  rawTypeDefNames,
+                  rawModelNames
+              )
+          );
+    const typeDefNames = new Set(typeDefs.map((entry) => entry.name));
     const models = Array.isArray(modelsRaw)
         ? modelsRaw.map((model) =>
-              normalizeModel(model.name, model as ModelDefinition & Record<string, unknown>, enumNames)
+              normalizeModel(
+                  model.name,
+                  model as ModelDefinition & Record<string, unknown>,
+                  enumNames,
+                  typeDefNames,
+                  rawModelNames
+              )
           )
         : Object.entries(modelsRaw ?? {}).map(([modelName, model]) =>
               normalizeModel(
                   modelName,
                   { ...(model as ModelDefinition), name: modelName } as ModelDefinition & Record<string, unknown>,
-                  enumNames
+                  enumNames,
+                  typeDefNames,
+                  rawModelNames
+              )
+          );
+    const modelNames = new Set(models.map((model) => model.name));
+    const procedures = Array.isArray(proceduresRaw)
+        ? proceduresRaw.map((entry) =>
+              normalizeProcedure(
+                  entry.name ?? '',
+                  entry as ProcedureDefinition & Record<string, unknown>,
+                  enumNames,
+                  typeDefNames,
+                  modelNames
+              )
+          )
+        : Object.entries(proceduresRaw ?? {}).map(([procedureName, entry]) =>
+              normalizeProcedure(
+                  procedureName,
+                  { ...(entry as ProcedureDefinition), name: procedureName } as ProcedureDefinition & Record<string, unknown>,
+                  enumNames,
+                  typeDefNames,
+                  modelNames
               )
           );
 
@@ -225,6 +394,10 @@ export function normalizeSchema(schema: ZenStackSchemaLike | ModelDefinition[]):
         modelMap: new Map(models.map((model) => [model.name, model])),
         enums,
         enumMap: new Map(enums.map((entry) => [entry.name, entry])),
+        typeDefs,
+        typeDefMap: new Map(typeDefs.map((typeDef) => [typeDef.name, typeDef])),
+        procedures,
+        procedureMap: new Map(procedures.map((procedure) => [procedure.name, procedure])),
     };
 }
 

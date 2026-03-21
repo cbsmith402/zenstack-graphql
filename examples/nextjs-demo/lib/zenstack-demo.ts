@@ -22,6 +22,15 @@ function createClient() {
     sqlite.pragma('foreign_keys = ON');
     return new ZenStackClient(schema, {
         dialect: new SqliteDialect({ database: sqlite }),
+        procedures: {
+            async getUserFeeds({ client, args }) {
+                return client.post.findMany({
+                    where: { authorId: args.userId },
+                    orderBy: { createdAt: 'desc' },
+                    take: args.limit ?? undefined,
+                });
+            },
+        },
     });
 }
 
@@ -123,6 +132,11 @@ export async function ensureDemoDatabaseReady() {
 }
 
 export async function resetDemoDatabase() {
+    if (!globalThis.__ZENSTACK_GRAPHQL_DEMO_INIT__) {
+        await ensureDemoDatabaseReady();
+        return;
+    }
+
     const client = await ensureDemoDatabaseReady();
     await reseedDemoDatabase(client);
 }

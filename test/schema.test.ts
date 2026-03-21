@@ -1,8 +1,10 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
+import * as assert from 'node:assert/strict';
+import { test } from 'node:test';
+
+import { GraphQLString } from 'graphql';
 
 import { createZenStackGraphQLSchema, graphql, printSchema } from '../src/index.js';
-import type { ModelDelegate, ZenStackClientLike } from '../src/index.js';
+import type { ModelDefinition, ModelDelegate, ZenStackClientLike } from '../src/index.js';
 import { createInMemoryClient, schema } from './helpers.js';
 
 function toPlain<T>(value: T): T {
@@ -153,6 +155,159 @@ test('supports computed fields from generated zenstack metadata when enabled', a
             name: true,
             postCount: true,
         },
+    });
+});
+
+test('generates procedure roots from zenstack schema metadata', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            provider: { type: 'sqlite' },
+            models: {
+                User: {
+                    fields: {
+                        id: { name: 'id', type: 'Int', id: true },
+                        name: { name: 'name', type: 'String' },
+                    },
+                    idFields: ['id'],
+                    uniqueFields: { id: { type: 'Int' } },
+                },
+            },
+            typeDefs: {
+                FeedSummary: {
+                    fields: {
+                        totalUsers: { name: 'totalUsers', type: 'Int' },
+                        featuredUser: { name: 'featuredUser', type: 'User', optional: true },
+                    },
+                },
+            },
+            procedures: {
+                getFeedSummary: {
+                    params: {
+                        minId: { name: 'minId', type: 'Int', optional: true },
+                    },
+                    returnType: 'FeedSummary',
+                },
+                signUp: {
+                    mutation: true,
+                    params: {
+                        name: { name: 'name', type: 'String' },
+                    },
+                    returnType: 'User',
+                },
+            },
+        },
+        getClient: async () => ({
+            $procs: {
+                async getFeedSummary(input?: { args?: Record<string, unknown> }) {
+                    assert.deepEqual(input, { args: { minId: 2 } });
+                    return {
+                        totalUsers: 1,
+                        featuredUser: { id: 2, name: 'Ben' },
+                    };
+                },
+                async signUp(input?: { args?: Record<string, unknown> }) {
+                    assert.deepEqual(input, { args: { name: 'Cara' } });
+                    return { id: 3, name: 'Cara' };
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /getFeedSummary\(minId: Int\): FeedSummary/);
+    assert.match(printed, /signUp\(name: String!\): User/);
+    assert.match(printed, /type FeedSummary/);
+
+    const queryResult = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                getFeedSummary(minId: 2) {
+                    totalUsers
+                    featuredUser {
+                        id
+                        name
+                    }
+                }
+            }
+        `,
+    });
+
+    assert.equal(queryResult.errors, undefined);
+    assert.deepEqual(toPlain(queryResult.data), {
+        getFeedSummary: {
+            totalUsers: 1,
+            featuredUser: { id: 2, name: 'Ben' },
+        },
+    });
+
+    const mutationResult = await graphql({
+        schema: graphqlSchema,
+        source: `
+            mutation {
+                signUp(name: "Cara") {
+                    id
+                    name
+                }
+            }
+        `,
+    });
+
+    assert.equal(mutationResult.errors, undefined);
+    assert.deepEqual(toPlain(mutationResult.data), {
+        signUp: {
+            id: 3,
+            name: 'Cara',
+        },
+    });
+});
+
+test('allows manual root field extensions for custom resolvers', async () => {
+    const customClient = { marker: 'demo' } as ZenStackClientLike & { marker: string };
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => customClient,
+        extensions: {
+            query: {
+                ping: {
+                    type: GraphQLString,
+                    resolve: (_source, _args, _context, _info, { client }) =>
+                        `${client.marker}:pong`,
+                },
+            },
+            mutation: {
+                echo: {
+                    type: GraphQLString,
+                    args: {
+                        value: { type: GraphQLString },
+                    },
+                    resolve: (_source, args, _context, _info, { client }) =>
+                        `${client.marker}:${String(args.value ?? '')}`,
+                },
+            },
+        },
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /ping: String/);
+    assert.match(printed, /echo\(value: String\): String/);
+
+    const queryResult = await graphql({
+        schema: graphqlSchema,
+        source: '{ ping }',
+    });
+    assert.equal(queryResult.errors, undefined);
+    assert.deepEqual(toPlain(queryResult.data), {
+        ping: 'demo:pong',
+    });
+
+    const mutationResult = await graphql({
+        schema: graphqlSchema,
+        source: 'mutation { echo(value: "hi") }',
+    });
+    assert.equal(mutationResult.errors, undefined);
+    assert.deepEqual(toPlain(mutationResult.data), {
+        echo: 'demo:hi',
     });
 });
 
@@ -740,7 +895,7 @@ test('supports relationship-aware updates through mutation roots', async () => {
 });
 
 test('only exposes by_pk roots for real primary keys', async () => {
-    const uniqueOnlySchema = {
+    const uniqueOnlySchema: { models: ModelDefinition[] } = {
         models: [
             {
                 name: 'EmailUser',
@@ -750,7 +905,7 @@ test('only exposes by_pk roots for real primary keys', async () => {
                 ],
             },
         ],
-    } as const;
+    };
 
     const graphqlSchema = createZenStackGraphQLSchema({
         schema: uniqueOnlySchema,
@@ -1049,6 +1204,51 @@ test('wraps an entire mutation operation in one interactive transaction', async 
             id: 9,
             name: 'Tessa',
         },
+    });
+});
+
+test('provides transaction-scoped clients to custom extension mutation resolvers', async () => {
+    type ExtensionClient = ZenStackClientLike & { marker: string };
+
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => {
+            const txClient = {
+                marker: 'tx',
+            } as ExtensionClient;
+
+            const client = {
+                marker: 'base',
+                $transaction: async <T,>(
+                    input: Promise<T>[] | ((tx: ExtensionClient) => Promise<T>)
+                ) => {
+                    if (Array.isArray(input)) {
+                        return Promise.all(input);
+                    }
+                    return input(txClient);
+                },
+            } as ExtensionClient;
+
+            return client;
+        },
+        extensions: {
+            mutation: {
+                whoAmI: {
+                    type: GraphQLString,
+                    resolve: (_source, _args, _context, _info, { client }) => client.marker,
+                },
+            },
+        },
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: 'mutation { whoAmI }',
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        whoAmI: 'tx',
     });
 });
 

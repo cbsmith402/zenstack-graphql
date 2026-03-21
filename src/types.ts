@@ -1,4 +1,10 @@
-import type { GraphQLError, GraphQLScalarType, GraphQLResolveInfo } from 'graphql';
+import type {
+    GraphQLError,
+    GraphQLFieldConfig,
+    GraphQLFieldConfigMap,
+    GraphQLResolveInfo,
+    GraphQLScalarType,
+} from 'graphql';
 
 export type ScalarType =
     | 'ID'
@@ -11,7 +17,8 @@ export type ScalarType =
     | 'Json'
     | 'BigInt';
 
-export type FieldKind = 'scalar' | 'enum' | 'relation';
+export type FieldKind = 'scalar' | 'enum' | 'relation' | 'typeDef';
+export type ProcedureTypeKind = 'scalar' | 'enum' | 'model' | 'typeDef';
 
 export interface BaseFieldDefinition {
     name: string;
@@ -68,6 +75,31 @@ export interface EnumDefinition {
     description?: string;
 }
 
+export interface TypeDefDefinition {
+    name: string;
+    fields: FieldDefinition[] | Record<string, FieldDefinition>;
+    description?: string;
+}
+
+export interface ProcedureParamDefinition {
+    name: string;
+    type: string;
+    isList?: boolean;
+    isNullable?: boolean;
+}
+
+export interface ProcedureDefinition {
+    name?: string;
+    params?:
+        | ProcedureParamDefinition[]
+        | Record<string, ProcedureParamDefinition>
+        | Record<string, Record<string, unknown>>;
+    returnType: string;
+    returnArray?: boolean;
+    mutation?: boolean;
+    description?: string;
+}
+
 export interface ZenStackSchemaLike {
     provider?: {
         type?: string;
@@ -86,8 +118,15 @@ export interface ZenStackSchemaLike {
               }
           >;
     enums?: EnumDefinition[] | Record<string, EnumDefinition>;
+    typeDefs?:
+        | TypeDefDefinition[]
+        | Record<string, TypeDefDefinition>
+        | Record<string, { name?: string; fields: Record<string, Record<string, unknown>> }>;
+    procedures?: ProcedureDefinition[] | Record<string, ProcedureDefinition>;
     modelMeta?: ZenStackSchemaLike['models'];
     enumMeta?: ZenStackSchemaLike['enums'];
+    typeDefMeta?: ZenStackSchemaLike['typeDefs'];
+    procedureMeta?: ZenStackSchemaLike['procedures'];
 }
 
 export interface NormalizedEnumDefinition {
@@ -113,6 +152,31 @@ export interface NormalizedModelDefinition {
     uniqueConstraints: UniqueConstraintDefinition[];
 }
 
+export interface NormalizedTypeDefDefinition {
+    name: string;
+    description?: string;
+    fields: NormalizedFieldDefinition[];
+    fieldMap: Map<string, NormalizedFieldDefinition>;
+}
+
+export interface NormalizedProcedureParamDefinition {
+    name: string;
+    type: string;
+    kind: ProcedureTypeKind;
+    isList?: boolean;
+    isNullable?: boolean;
+}
+
+export interface NormalizedProcedureDefinition {
+    name: string;
+    description?: string;
+    params: NormalizedProcedureParamDefinition[];
+    returnType: string;
+    returnKind: ProcedureTypeKind;
+    returnArray?: boolean;
+    mutation?: boolean;
+}
+
 export interface NormalizedSchema {
     provider?: {
         type?: string;
@@ -121,6 +185,10 @@ export interface NormalizedSchema {
     modelMap: Map<string, NormalizedModelDefinition>;
     enums: NormalizedEnumDefinition[];
     enumMap: Map<string, NormalizedEnumDefinition>;
+    typeDefs: NormalizedTypeDefDefinition[];
+    typeDefMap: Map<string, NormalizedTypeDefDefinition>;
+    procedures: NormalizedProcedureDefinition[];
+    procedureMap: Map<string, NormalizedProcedureDefinition>;
 }
 
 export interface ProviderCapabilities {
@@ -149,8 +217,10 @@ export interface ResolverInvocation<TContext = unknown> {
         | 'updateByPk'
         | 'deleteMany'
         | 'deleteByPk'
-        | 'relation';
-    model: NormalizedModelDefinition;
+        | 'relation'
+        | 'procedureQuery'
+        | 'procedureMutation';
+    model?: NormalizedModelDefinition;
     fieldName: string;
     args: Record<string, unknown>;
     context: TContext;
@@ -193,6 +263,24 @@ export interface NamingStrategy {
 
 export type NamingConfig = 'hasura' | 'prisma' | Partial<NamingStrategy>;
 
+export type RootFieldConfig<TClient = unknown, TContext = unknown> = Omit<
+    GraphQLFieldConfig<unknown, TContext>,
+    'resolve'
+> & {
+    resolve?: (
+        source: unknown,
+        args: Record<string, unknown>,
+        context: TContext,
+        info: GraphQLResolveInfo,
+        helpers: { client: TClient }
+    ) => unknown | Promise<unknown>;
+};
+
+export interface RootFieldExtensions<TClient = unknown, TContext = unknown> {
+    query?: Record<string, RootFieldConfig<TClient, TContext>>;
+    mutation?: Record<string, RootFieldConfig<TClient, TContext>>;
+}
+
 export interface CreateZenStackGraphQLSchemaOptions<TClient = unknown, TContext = unknown> {
     schema: ZenStackSchemaLike | ModelDefinition[];
     getClient(context: TContext): TClient | Promise<TClient>;
@@ -200,6 +288,7 @@ export interface CreateZenStackGraphQLSchemaOptions<TClient = unknown, TContext 
     features?: FeatureFlags;
     scalars?: Partial<Record<ScalarType, GraphQLScalarType>>;
     hooks?: ResolverHooks<TContext>;
+    extensions?: RootFieldExtensions<TClient, TContext>;
 }
 
 export interface ModelDelegate {
@@ -216,9 +305,9 @@ export interface ModelDelegate {
     deleteMany?(args: Record<string, unknown>): Promise<{ count: number }>;
 }
 
-export type ZenStackClientLike = Record<string, ModelDelegate | unknown> & {
-    $transaction?<T>(operations: Promise<T>[]): Promise<T[]>;
-    $transaction?<T>(callback: (tx: ZenStackClientLike) => Promise<T>): Promise<T>;
+export type ZenStackClientLike = Record<string, unknown> & {
+    $transaction?: unknown;
+    $procs?: Record<string, unknown>;
 };
 
 export interface ZenStackGraphQLExecutionMetadata<

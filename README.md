@@ -1,6 +1,6 @@
 # zenstack-graphql
 
-`zenstack-graphql` is a standalone GraphQL adapter for ZenStack-style model metadata. It generates a framework-agnostic `GraphQLSchema` with Hasura-like CRUD roots, model-driven filters and ordering, aggregates, nested relation inserts, and core insert/update/delete mutations.
+`zenstack-graphql` is a standalone GraphQL adapter for ZenStack-style model metadata. It generates a framework-agnostic `GraphQLSchema` with Hasura-like CRUD roots, model-driven filters and ordering, aggregates, nested relation inserts, core insert/update/delete mutations, ZenStack procedure roots, and optional custom root resolvers.
 
 ## Usage
 
@@ -27,7 +27,7 @@ const schema = createZenStackGraphQLSchema({
 
 ## Public API
 
-- `createZenStackGraphQLSchema({ schema, getClient, naming, features, scalars, hooks })`
+- `createZenStackGraphQLSchema({ schema, getClient, naming, features, scalars, hooks, extensions })`
 - `normalizeSchema(schema)`
 - `normalizeError(error)`
 
@@ -41,6 +41,8 @@ The generated schema uses Hasura-like defaults:
 - `*_insert_input` supports nested relation `data` inserts
 - `*_set_input` supports relation-aware updates for the nested mutation shapes supported by the underlying ZenStack ORM
 - `features.computedFields` enables read-only `@computed` fields detected from ZenStack-generated metadata
+- ZModel `procedure` and `mutation procedure` definitions are exposed as GraphQL query and mutation roots via `client.$procs`
+- `extensions.query` and `extensions.mutation` let you attach manual GraphQL root fields that receive the same request-scoped ZenStack client as generated resolvers
 - `*_by_pk` roots are emitted only for real primary keys
 
 ## Notes

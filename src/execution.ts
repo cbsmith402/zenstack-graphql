@@ -65,9 +65,12 @@ export async function graphql(args: GraphQLArgs) {
     if (typeof client.$transaction !== 'function') {
         return baseGraphql(args);
     }
+    const transaction = client.$transaction as (
+        callback: (tx: ZenStackClientLike) => Promise<ExecutionResult>
+    ) => Promise<ExecutionResult>;
 
     try {
-        return await client.$transaction(async (transactionClient) =>
+        return await transaction(async (transactionClient: ZenStackClientLike) =>
             executionClientStorage.run(transactionClient, async () => {
                 const result = await baseGraphql(args);
                 if (result.errors?.length) {

@@ -43,10 +43,14 @@ import type {
     NamingStrategy,
     NormalizedFieldDefinition,
     NormalizedModelDefinition,
+    NormalizedProcedureDefinition,
+    NormalizedProcedureParamDefinition,
     NormalizedSchema,
+    NormalizedTypeDefDefinition,
     OrderByDirection,
     ProviderCapabilities,
     ResolverInvocation,
+    RootFieldConfig,
     ScalarType,
     ZenStackClientLike,
 } from './types.js';
@@ -279,7 +283,9 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly naming: NamingStrategy;
     private readonly providerCapabilities: ProviderCapabilities;
     private readonly objectTypes = new Map<string, GraphQLObjectType>();
+    private readonly typeDefObjectTypes = new Map<string, GraphQLObjectType>();
     private readonly enumTypes = new Map<string, GraphQLEnumType>();
+    private readonly typeDefInputTypes = new Map<string, GraphQLInputObjectType>();
     private readonly selectColumnEnums = new Map<string, GraphQLEnumType>();
     private readonly comparisonInputs = new Map<string, GraphQLInputObjectType>();
     private readonly whereInputs = new Map<string, GraphQLInputObjectType>();
@@ -470,6 +476,19 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             };
         }
 
+        for (const procedure of this.normalizedSchema.procedures) {
+            const target = procedure.mutation ? mutationFields : queryFields;
+            if (target[procedure.name]) {
+                throw new Error(
+                    `Duplicate ${procedure.mutation ? 'mutation' : 'query'} root field "${procedure.name}"`
+                );
+            }
+            target[procedure.name] = this.getProcedureFieldConfig(procedure);
+        }
+
+        this.assignRootFields(queryFields, this.options.extensions?.query, 'query');
+        this.assignRootFields(mutationFields, this.options.extensions?.mutation, 'mutation');
+
         const schema = new GraphQLSchema({
             query: new GraphQLObjectType({
                 name: 'Query',
@@ -488,12 +507,98 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return schema;
     }
 
+    private getProcedureOutputType(procedure: NormalizedProcedureDefinition): GraphQLOutputType {
+        const baseType = this.getNamedOutputType(procedure.returnType);
+        if (procedure.returnArray) {
+            return new GraphQLList(new GraphQLNonNull(baseType));
+        }
+        return baseType;
+    }
+
+    private getProcedureArgumentType(param: NormalizedProcedureParamDefinition): GraphQLInputType {
+        const baseType = this.getNamedInputType(param.type);
+        return maybeWrapList(baseType, param.isList, param.isNullable) as GraphQLInputType;
+    }
+
+    private getProcedureArgs(
+        procedure: NormalizedProcedureDefinition
+    ): GraphQLFieldConfigArgumentMap {
+        return Object.fromEntries(
+            procedure.params.map((param) => [
+                param.name,
+                {
+                    type: this.getProcedureArgumentType(param),
+                },
+            ])
+        );
+    }
+
+    private getProcedureFieldConfig(
+        procedure: NormalizedProcedureDefinition
+    ): GraphQLFieldConfig<unknown, TContext> {
+        return {
+            type: this.getProcedureOutputType(procedure),
+            description: procedure.description,
+            args: this.getProcedureArgs(procedure),
+            resolve: this.createResolver(
+                procedure.mutation ? 'procedureMutation' : 'procedureQuery',
+                undefined,
+                async ({ client, args }) => {
+                    const procedureMap = client.$procs;
+                    const handler = procedureMap?.[procedure.name] as
+                        | ((input?: { args?: Record<string, unknown> }) => Promise<unknown>)
+                        | undefined;
+                    if (typeof handler !== 'function') {
+                        throw new Error(`Missing procedure implementation for "${procedure.name}"`);
+                    }
+                    return handler({ args });
+                }
+            ),
+        };
+    }
+
     private getModel(modelName: string) {
         const model = this.normalizedSchema.modelMap.get(modelName);
         if (!model) {
             throw new Error(`Unknown model "${modelName}"`);
         }
         return model;
+    }
+
+    private getTypeDef(typeDefName: string) {
+        const typeDef = this.normalizedSchema.typeDefMap.get(typeDefName);
+        if (!typeDef) {
+            throw new Error(`Unknown type definition "${typeDefName}"`);
+        }
+        return typeDef;
+    }
+
+    private assignRootFields(
+        target: GraphQLFieldConfigMap<unknown, TContext>,
+        additions: Record<string, RootFieldConfig<TClient, TContext>> | undefined,
+        rootKind: 'query' | 'mutation'
+    ) {
+        if (!additions) {
+            return;
+        }
+
+        for (const [fieldName, config] of Object.entries(additions)) {
+            if (target[fieldName]) {
+                throw new Error(`Duplicate ${rootKind} root field "${fieldName}"`);
+            }
+            const { resolve, ...rest } = config;
+            target[fieldName] = {
+                ...rest,
+                resolve: resolve
+                    ? async (source, args, context, info) => {
+                          const client =
+                              getExecutionClient<TClient>() ??
+                              ((await this.options.getClient(context)) as TClient);
+                          return resolve(source, args, context, info, { client });
+                      }
+                    : undefined,
+            };
+        }
     }
 
     private getVisibleFields(model: NormalizedModelDefinition) {
@@ -586,11 +691,45 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         };
     }
 
+    private getNamedOutputType(typeName: string): GraphQLOutputType {
+        if (this.normalizedSchema.enumMap.has(typeName)) {
+            return this.getEnumType(typeName);
+        }
+        if (this.normalizedSchema.modelMap.has(typeName)) {
+            return this.getModelObjectType(this.getModel(typeName));
+        }
+        if (this.normalizedSchema.typeDefMap.has(typeName)) {
+            return this.getTypeDefObjectType(this.getTypeDef(typeName));
+        }
+        return getScalarType(typeName as ScalarType, this.options.scalars);
+    }
+
+    private getNamedInputType(typeName: string): GraphQLInputType {
+        if (this.normalizedSchema.enumMap.has(typeName)) {
+            return this.getEnumType(typeName);
+        }
+        if (this.normalizedSchema.modelMap.has(typeName)) {
+            return this.getInsertInput(this.getModel(typeName));
+        }
+        if (this.normalizedSchema.typeDefMap.has(typeName)) {
+            return this.getTypeDefInputType(this.getTypeDef(typeName));
+        }
+        return getScalarType(typeName as ScalarType, this.options.scalars);
+    }
+
     private getFieldOutputType(field: NormalizedFieldDefinition): GraphQLOutputType {
         if (field.kind === 'relation') {
             const relatedModel = this.getModel(field.type);
             return maybeWrapList(
                 this.getModelObjectType(relatedModel),
+                field.isList,
+                field.isNullable
+            ) as GraphQLOutputType;
+        }
+
+        if (field.kind === 'typeDef') {
+            return maybeWrapList(
+                this.getTypeDefObjectType(this.getTypeDef(field.type)),
                 field.isList,
                 field.isNullable
             ) as GraphQLOutputType;
@@ -609,6 +748,37 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             field.isList,
             field.isNullable
         ) as GraphQLOutputType;
+    }
+
+    private getFieldInputType(
+        field: NormalizedFieldDefinition,
+        forceNullable = false
+    ): GraphQLInputType {
+        if (field.kind === 'relation') {
+            return maybeWrapList(
+                this.getInsertInput(this.getModel(field.type)),
+                field.isList,
+                forceNullable ? true : field.isNullable
+            ) as GraphQLInputType;
+        }
+
+        if (field.kind === 'typeDef') {
+            return maybeWrapList(
+                this.getTypeDefInputType(this.getTypeDef(field.type)),
+                field.isList,
+                forceNullable ? true : field.isNullable
+            ) as GraphQLInputType;
+        }
+
+        const baseType =
+            field.kind === 'enum'
+                ? this.getEnumType(field.type)
+                : getScalarType(field.type as ScalarType, this.options.scalars);
+        return maybeWrapList(
+            baseType as GraphQLInputType,
+            field.isList,
+            forceNullable ? true : field.isNullable
+        ) as GraphQLInputType;
     }
 
     private getComparatorInput(field: NormalizedFieldDefinition) {
@@ -1027,13 +1197,8 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private getScalarSetInputFields(model: NormalizedModelDefinition) {
         const fields: GraphQLInputFieldConfigMap = {};
         for (const field of this.getMutableFields(model)) {
-            const outputType =
-                field.kind === 'enum'
-                    ? this.getEnumType(field.type)
-                    : getScalarType(field.type as ScalarType, this.options.scalars);
-
             fields[field.name] = {
-                type: maybeWrapList(outputType as GraphQLInputType, field.isList, true) as GraphQLInputType,
+                type: this.getFieldInputType(field, true),
                 description: field.description,
             };
         }
@@ -1139,6 +1304,56 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
         this.objectTypes.set(model.name, objectType);
         return objectType;
+    }
+
+    private getTypeDefObjectType(typeDef: NormalizedTypeDefDefinition) {
+        const existing = this.typeDefObjectTypes.get(typeDef.name);
+        if (existing) {
+            return existing;
+        }
+
+        const objectType = new GraphQLObjectType({
+            name: typeDef.name,
+            description: typeDef.description,
+            fields: () => {
+                const fields: GraphQLFieldConfigMap<unknown, TContext> = {};
+                for (const field of typeDef.fields) {
+                    fields[field.name] = {
+                        type: this.getFieldOutputType(field),
+                        description: field.description,
+                    };
+                }
+                return fields;
+            },
+        });
+
+        this.typeDefObjectTypes.set(typeDef.name, objectType);
+        return objectType;
+    }
+
+    private getTypeDefInputType(typeDef: NormalizedTypeDefDefinition) {
+        const existing = this.typeDefInputTypes.get(typeDef.name);
+        if (existing) {
+            return existing;
+        }
+
+        const inputType = new GraphQLInputObjectType({
+            name: `${typeDef.name}_input`,
+            description: typeDef.description,
+            fields: () => {
+                const fields: GraphQLInputFieldConfigMap = {};
+                for (const field of typeDef.fields) {
+                    fields[field.name] = {
+                        type: this.getFieldInputType(field),
+                        description: field.description,
+                    };
+                }
+                return fields;
+            },
+        });
+
+        this.typeDefInputTypes.set(typeDef.name, inputType);
+        return inputType;
     }
 
     private getMutationResponseType(model: NormalizedModelDefinition) {
@@ -1269,7 +1484,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
     private createResolver<TArgs extends Record<string, unknown>, TResult>(
         operation: ResolverInvocation<TContext>['operation'],
-        model: NormalizedModelDefinition,
+        model: NormalizedModelDefinition | undefined,
         handler: (input: {
             client: TClient;
             args: TArgs;

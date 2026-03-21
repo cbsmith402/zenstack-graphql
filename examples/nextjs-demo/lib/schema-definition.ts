@@ -201,6 +201,32 @@ export const sampleOperations = [
         variables: '{}',
     },
     {
+        label: 'Procedure Root',
+        description:
+            'Call a real ZenStack custom procedure defined in ZModel and exposed as a GraphQL query root.',
+        query: `query ProcedureRoot {
+  getUserFeeds(userId: 1, limit: 2) {
+    id
+    title
+    views
+    author {
+      id
+      name
+    }
+  }
+}`,
+        variables: '{}',
+    },
+    {
+        label: 'Manual Extension',
+        description:
+            'Call a custom GraphQL root field added through extensions.query while still using the same request-scoped ZenStack client.',
+        query: `query ManualExtension {
+  demoSummary
+}`,
+        variables: '{}',
+    },
+    {
         label: 'Relation Aggregate',
         description: 'Query Hasura-style relation aggregate fields generated from the ZenStack models.',
         query: `query RelationAggregate {
@@ -273,4 +299,6 @@ model Post {
   createdAt DateTime @default(now())
   author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
   authorId  Int
-}`;
+}
+
+procedure getUserFeeds(userId: Int, limit: Int?) : Post[]`;

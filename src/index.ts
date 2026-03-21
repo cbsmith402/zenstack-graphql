@@ -1,4 +1,4 @@
-export { printSchema } from 'graphql';
+export { GraphQLNonNull, GraphQLString, printSchema } from 'graphql';
 export { graphql } from './execution.js';
 export { createZenStackGraphQLSchema } from './schema.js';
 export { normalizeSchema } from './metadata.js';
@@ -12,11 +12,18 @@ export type {
     ModelDelegate,
     NamingConfig,
     NamingStrategy,
+    ProcedureDefinition,
+    ProcedureParamDefinition,
     NormalizedModelDefinition,
+    NormalizedProcedureDefinition,
     NormalizedSchema,
+    NormalizedTypeDefDefinition,
+    RootFieldConfig,
+    RootFieldExtensions,
     ResolverHooks,
     ScalarFieldDefinition,
     ScalarType,
+    TypeDefDefinition,
     ZenStackClientLike,
     ZenStackGraphQLExecutionMetadata,
     ZenStackSchemaLike,
