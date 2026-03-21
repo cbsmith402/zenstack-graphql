@@ -123,6 +123,14 @@ export interface NormalizedSchema {
     enumMap: Map<string, NormalizedEnumDefinition>;
 }
 
+export interface ProviderCapabilities {
+    provider: string;
+    supportsInsensitiveMode: boolean;
+    supportsJsonFilters: boolean;
+    supportsJsonFilterMode: boolean;
+    supportsScalarListFilters: boolean;
+}
+
 export type OrderByDirection =
     | 'asc'
     | 'desc'

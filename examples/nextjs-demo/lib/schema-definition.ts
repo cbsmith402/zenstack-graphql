@@ -180,6 +180,27 @@ export const sampleOperations = [
         variables: '{}',
     },
     {
+        label: 'JSON Filter',
+        description:
+            'Filter a real SQLite-backed Json field with ZenStack JSON-path operators through the generated GraphQL schema.',
+        query: `query JsonFilter {
+  users(
+    where: {
+      profile: {
+        path: "$.bio"
+        string_contains: "developer"
+      }
+    }
+    order_by: [{ id: asc }]
+  ) {
+    id
+    name
+    profile
+  }
+}`,
+        variables: '{}',
+    },
+    {
         label: 'Relation Aggregate',
         description: 'Query Hasura-style relation aggregate fields generated from the ZenStack models.',
         query: `query RelationAggregate {
@@ -240,6 +261,7 @@ model User {
   name      String
   age       Int
   role      Role     @default(USER)
+  profile   Json?
   createdAt DateTime @default(now())
   posts     Post[]
 }

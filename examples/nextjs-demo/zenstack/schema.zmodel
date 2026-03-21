@@ -13,6 +13,7 @@ model User {
     name      String
     age       Int
     role      Role     @default(USER)
+    profile   Json?
     createdAt DateTime @default(now())
     posts     Post[]
 }

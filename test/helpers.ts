@@ -102,8 +102,14 @@ function matchesScalarFilter(value: unknown, filter: unknown) {
     if (filter.equals !== undefined && value !== filter.equals) {
         return false;
     }
-    if (filter.not !== undefined && value === filter.not) {
-        return false;
+    if (filter.not !== undefined) {
+        if (isRecord(filter.not)) {
+            if (matchesScalarFilter(value, filter.not)) {
+                return false;
+            }
+        } else if (value === filter.not) {
+            return false;
+        }
     }
     if (filter.gt !== undefined && !(Number(value) > Number(filter.gt))) {
         return false;

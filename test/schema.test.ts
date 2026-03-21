@@ -36,6 +36,8 @@ test('generates Hasura-style root fields and types', async () => {
     assert.match(printed, /delete_users_by_pk\(id: Int!/);
     assert.match(printed, /type User/);
     assert.match(printed, /input User_bool_exp/);
+    assert.match(printed, /_nlike: String/);
+    assert.match(printed, /_nicontains: String/);
 });
 
 test('executes nested reads and aggregates with Hasura-like args', async () => {
@@ -172,6 +174,176 @@ test('supports distinct_on, aggregate count args, and relation aggregate fields'
             },
         },
     });
+});
+
+test('supports extended string negation operators', async () => {
+    const { client } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => client,
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                users(where: { name: { _nicontains: "EN" } }, order_by: [{ id: asc }]) {
+                    id
+                    name
+                }
+                posts(where: { title: { _nlike: "%Notes%" } }, order_by: [{ id: asc }]) {
+                    id
+                    title
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        users: [{ id: 1, name: 'Ada' }],
+        posts: [
+            { id: 10, title: 'ZenStack Intro' },
+            { id: 12, title: 'GraphQL Adapter' },
+        ],
+    });
+});
+
+test('exposes provider-specific json and scalar-list operators for postgresql', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            provider: { type: 'postgresql' },
+            models: [
+                {
+                    name: 'Document',
+                    fields: [
+                        { name: 'id', kind: 'scalar', type: 'Int', isId: true },
+                        { name: 'metadata', kind: 'scalar', type: 'Json', isNullable: true },
+                        { name: 'tags', kind: 'scalar', type: 'String', isList: true },
+                    ],
+                },
+            ],
+        },
+        getClient: async () => ({
+            Document: {
+                async findMany() {
+                    return [];
+                },
+            },
+            document: {
+                async findMany() {
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /input Json_comparison_exp/);
+    assert.match(printed, /path: String/);
+    assert.match(printed, /string_contains: String/);
+    assert.match(printed, /mode: query_mode/);
+    assert.match(printed, /input String_list_comparison_exp/);
+    assert.match(printed, /hasSome: \[String!]/);
+});
+
+test('compiles provider-specific json and scalar-list filters', async () => {
+    let capturedWhere: unknown;
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            provider: { type: 'postgresql' },
+            models: [
+                {
+                    name: 'Document',
+                    fields: [
+                        { name: 'id', kind: 'scalar', type: 'Int', isId: true },
+                        { name: 'metadata', kind: 'scalar', type: 'Json', isNullable: true },
+                        { name: 'tags', kind: 'scalar', type: 'String', isList: true },
+                    ],
+                },
+            ],
+        },
+        getClient: async () => ({
+            Document: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedWhere = args?.where;
+                    return [];
+                },
+            },
+            document: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedWhere = args?.where;
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                documents(
+                    where: {
+                        metadata: {
+                            path: "$.bio"
+                            string_contains: "dev"
+                            mode: insensitive
+                        }
+                        tags: { hasSome: ["graphql", "zenstack"] }
+                    }
+                ) {
+                    id
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(capturedWhere, {
+        metadata: {
+            path: '$.bio',
+            string_contains: 'dev',
+            mode: 'insensitive',
+        },
+        tags: {
+            hasSome: ['graphql', 'zenstack'],
+        },
+    });
+});
+
+test('gates provider-specific json mode and scalar-list operators for sqlite', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            provider: { type: 'sqlite' },
+            models: [
+                {
+                    name: 'Document',
+                    fields: [
+                        { name: 'id', kind: 'scalar', type: 'Int', isId: true },
+                        { name: 'metadata', kind: 'scalar', type: 'Json', isNullable: true },
+                        { name: 'tags', kind: 'scalar', type: 'String', isList: true },
+                    ],
+                },
+            ],
+        },
+        getClient: async () => ({
+            Document: {
+                async findMany() {
+                    return [];
+                },
+            },
+            document: {
+                async findMany() {
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.doesNotMatch(printed, /mode: query_mode/);
+    assert.doesNotMatch(printed, /hasSome: \[String!]/);
 });
 
 test('executes insert, update, and delete mutations', async () => {
@@ -565,6 +737,51 @@ test('omits insensitive mode for sqlite-backed string filters', async () => {
     assert.deepEqual(capturedWhere, {
         name: {
             contains: 'Ada',
+        },
+    });
+});
+
+test('preserves negated insensitive filters for providers that support mode', async () => {
+    let capturedWhere: unknown;
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            provider: { type: 'postgresql' },
+            ...schema,
+        },
+        getClient: async () => ({
+            User: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedWhere = args?.where;
+                    return [];
+                },
+            },
+            user: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedWhere = args?.where;
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                users(where: { name: { _nilike: "%Ada%" } }) {
+                    id
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(capturedWhere, {
+        name: {
+            not: {
+                contains: 'Ada',
+                mode: 'insensitive',
+            },
         },
     });
 });

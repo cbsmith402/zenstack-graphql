@@ -27,6 +27,7 @@ import { getExecutionClient, registerExecutionMetadata } from './execution.js';
 import {
     getIdentifierFields,
     getPrimaryKeyFields,
+    getProviderCapabilities,
     getScalarFields,
     getUniqueFieldSets,
     isComparableScalar,
@@ -45,6 +46,7 @@ import type {
     NormalizedModelDefinition,
     NormalizedSchema,
     OrderByDirection,
+    ProviderCapabilities,
     ResolverInvocation,
     ScalarType,
     ZenStackClientLike,
@@ -59,6 +61,14 @@ const ORDER_BY_ENUM = new GraphQLEnumType({
         asc_nulls_last: { value: 'asc_nulls_last' },
         desc_nulls_first: { value: 'desc_nulls_first' },
         desc_nulls_last: { value: 'desc_nulls_last' },
+    },
+});
+
+const QUERY_MODE_ENUM = new GraphQLEnumType({
+    name: 'query_mode',
+    values: {
+        default: { value: 'default' },
+        insensitive: { value: 'insensitive' },
     },
 });
 
@@ -268,6 +278,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly normalizedSchema: NormalizedSchema;
     private readonly features: Required<FeatureFlags>;
     private readonly naming: NamingStrategy;
+    private readonly providerCapabilities: ProviderCapabilities;
     private readonly objectTypes = new Map<string, GraphQLObjectType>();
     private readonly enumTypes = new Map<string, GraphQLEnumType>();
     private readonly selectColumnEnums = new Map<string, GraphQLEnumType>();
@@ -294,10 +305,23 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         this.normalizedSchema = normalizeSchema(options.schema);
         this.features = { ...DEFAULT_FEATURES, ...options.features };
         this.naming = resolveNamingStrategy(options.naming);
+        this.providerCapabilities = getProviderCapabilities(this.normalizedSchema);
     }
 
     private supportsInsensitiveMode() {
-        return this.normalizedSchema.provider?.type !== 'sqlite';
+        return this.providerCapabilities.supportsInsensitiveMode;
+    }
+
+    private supportsJsonFilters() {
+        return this.providerCapabilities.supportsJsonFilters;
+    }
+
+    private supportsJsonFilterMode() {
+        return this.providerCapabilities.supportsJsonFilterMode;
+    }
+
+    private supportsScalarListFilters() {
+        return this.providerCapabilities.supportsScalarListFilters;
     }
 
     createSchema() {
@@ -583,19 +607,23 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     }
 
     private getComparatorInput(field: NormalizedFieldDefinition) {
-        const key = `${field.kind}:${field.type}`;
+        const key = `${field.kind}:${field.type}:${field.isList ? 'list' : 'single'}`;
         const existing = this.comparisonInputs.get(key);
         if (existing) {
             return existing;
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${field.type}_comparison_exp`,
+            name: `${field.type}${field.isList ? '_list' : ''}_comparison_exp`,
             fields: () => {
-                const baseType =
+                const scalarType =
                     field.kind === 'enum'
                         ? this.getEnumType(field.type)
                         : getScalarType(field.type as ScalarType, this.options.scalars);
+                const baseType =
+                    field.isList
+                        ? new GraphQLList(new GraphQLNonNull(scalarType))
+                        : scalarType;
                 const fields: GraphQLInputFieldConfigMap = {
                     _eq: { type: baseType },
                     _neq: { type: baseType },
@@ -604,22 +632,56 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     _is_null: { type: getScalarType('Boolean', this.options.scalars) },
                 };
 
-                if (field.kind === 'scalar' && isComparableScalar(field.type)) {
+                if (!field.isList && field.kind === 'scalar' && isComparableScalar(field.type)) {
                     fields._gt = { type: baseType };
                     fields._gte = { type: baseType };
                     fields._lt = { type: baseType };
                     fields._lte = { type: baseType };
                 }
 
-                if (field.kind === 'scalar' && field.type === 'String') {
+                if (field.kind === 'scalar' && field.type === 'Json' && this.supportsJsonFilters()) {
+                    fields.path = { type: GraphQLString };
+                    fields.equals = { type: getScalarType('Json', this.options.scalars) };
+                    fields.not = { type: getScalarType('Json', this.options.scalars) };
+                    fields.string_contains = { type: GraphQLString };
+                    fields.string_starts_with = { type: GraphQLString };
+                    fields.string_ends_with = { type: GraphQLString };
+                    fields.array_contains = { type: getScalarType('Json', this.options.scalars) };
+                    fields.array_starts_with = { type: getScalarType('Json', this.options.scalars) };
+                    fields.array_ends_with = { type: getScalarType('Json', this.options.scalars) };
+                    if (this.supportsJsonFilterMode()) {
+                        fields.mode = { type: QUERY_MODE_ENUM };
+                    }
+                }
+
+                if (field.isList && this.supportsScalarListFilters()) {
+                    fields.has = { type: scalarType };
+                    fields.hasEvery = {
+                        type: new GraphQLList(new GraphQLNonNull(scalarType)),
+                    };
+                    fields.hasSome = {
+                        type: new GraphQLList(new GraphQLNonNull(scalarType)),
+                    };
+                    fields.isEmpty = { type: getScalarType('Boolean', this.options.scalars) };
+                }
+
+                if (!field.isList && field.kind === 'scalar' && field.type === 'String') {
                     fields._contains = { type: GraphQLString };
+                    fields._ncontains = { type: GraphQLString };
                     fields._icontains = { type: GraphQLString };
+                    fields._nicontains = { type: GraphQLString };
                     fields._starts_with = { type: GraphQLString };
+                    fields._nstarts_with = { type: GraphQLString };
                     fields._istarts_with = { type: GraphQLString };
+                    fields._nistarts_with = { type: GraphQLString };
                     fields._ends_with = { type: GraphQLString };
+                    fields._nends_with = { type: GraphQLString };
                     fields._iends_with = { type: GraphQLString };
+                    fields._niends_with = { type: GraphQLString };
                     fields._like = { type: GraphQLString };
+                    fields._nlike = { type: GraphQLString };
                     fields._ilike = { type: GraphQLString };
+                    fields._nilike = { type: GraphQLString };
                 }
 
                 return fields;
@@ -1794,13 +1856,38 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const result: Record<string, unknown> = {};
+        const addNegatedFilter = (filter: unknown) => {
+            if (isPlainObject(filter)) {
+                if (isPlainObject(result.not)) {
+                    Object.assign(result.not, filter);
+                } else if (result.not !== undefined) {
+                    result.not = { equals: result.not, ...filter };
+                } else {
+                    result.not = filter;
+                }
+                return;
+            }
+
+            if (result.not === undefined) {
+                result.not = filter;
+                return;
+            }
+
+            if (isPlainObject(result.not)) {
+                result.not.equals = filter;
+                return;
+            }
+
+            result.not = filter;
+        };
+
         for (const [key, value] of Object.entries(input)) {
             switch (key) {
                 case '_eq':
                     result.equals = value;
                     break;
                 case '_neq':
-                    result.not = value;
+                    addNegatedFilter({ equals: value });
                     break;
                 case '_gt':
                     result.gt = value;
@@ -1820,15 +1907,30 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 case '_nin':
                     result.notIn = value;
                     break;
+                case 'has':
+                    result.has = value;
+                    break;
+                case 'hasEvery':
+                    result.hasEvery = value;
+                    break;
+                case 'hasSome':
+                    result.hasSome = value;
+                    break;
+                case 'isEmpty':
+                    result.isEmpty = value;
+                    break;
                 case '_is_null':
                     if (value === true) {
                         result.equals = null;
                     } else if (value === false) {
-                        result.not = null;
+                        addNegatedFilter({ equals: null });
                     }
                     break;
                 case '_contains':
                     result.contains = value;
+                    break;
+                case '_ncontains':
+                    addNegatedFilter({ contains: value });
                     break;
                 case '_icontains':
                     result.contains = value;
@@ -1836,8 +1938,18 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                         result.mode = 'insensitive';
                     }
                     break;
+                case '_nicontains':
+                    addNegatedFilter(
+                        this.supportsInsensitiveMode()
+                            ? { contains: value, mode: 'insensitive' }
+                            : { contains: value }
+                    );
+                    break;
                 case '_starts_with':
                     result.startsWith = value;
+                    break;
+                case '_nstarts_with':
+                    addNegatedFilter({ startsWith: value });
                     break;
                 case '_istarts_with':
                     result.startsWith = value;
@@ -1845,8 +1957,18 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                         result.mode = 'insensitive';
                     }
                     break;
+                case '_nistarts_with':
+                    addNegatedFilter(
+                        this.supportsInsensitiveMode()
+                            ? { startsWith: value, mode: 'insensitive' }
+                            : { startsWith: value }
+                    );
+                    break;
                 case '_ends_with':
                     result.endsWith = value;
+                    break;
+                case '_nends_with':
+                    addNegatedFilter({ endsWith: value });
                     break;
                 case '_iends_with':
                     result.endsWith = value;
@@ -1854,14 +1976,47 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                         result.mode = 'insensitive';
                     }
                     break;
+                case '_niends_with':
+                    addNegatedFilter(
+                        this.supportsInsensitiveMode()
+                            ? { endsWith: value, mode: 'insensitive' }
+                            : { endsWith: value }
+                    );
+                    break;
                 case '_like':
                     Object.assign(result, likePatternToFilter(String(value)));
+                    break;
+                case '_nlike':
+                    addNegatedFilter(likePatternToFilter(String(value)));
                     break;
                 case '_ilike':
                     Object.assign(
                         result,
                         likePatternToFilter(String(value), this.supportsInsensitiveMode())
                     );
+                    break;
+                case '_nilike':
+                    addNegatedFilter(
+                        likePatternToFilter(String(value), this.supportsInsensitiveMode())
+                    );
+                    break;
+                case 'path':
+                case 'equals':
+                case 'string_contains':
+                case 'string_starts_with':
+                case 'string_ends_with':
+                case 'array_contains':
+                case 'array_starts_with':
+                case 'array_ends_with':
+                    result[key] = value;
+                    break;
+                case 'mode':
+                    if (this.supportsJsonFilterMode()) {
+                        result.mode = value;
+                    }
+                    break;
+                case 'not':
+                    addNegatedFilter(value);
                     break;
                 default:
                     if (field.kind === 'enum') {

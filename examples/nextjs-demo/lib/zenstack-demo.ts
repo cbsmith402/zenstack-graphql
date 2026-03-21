@@ -25,6 +25,24 @@ function createClient() {
     });
 }
 
+async function ensureDemoSchemaCompatibility() {
+    await fs.mkdir(path.dirname(DATABASE_PATH), { recursive: true });
+    const sqlite = new Database(DATABASE_PATH);
+    try {
+        const userColumns = sqlite
+            .prepare(`PRAGMA table_info("User")`)
+            .all() as Array<{ name?: string }>;
+
+        const hasUserTable = userColumns.length > 0;
+        const hasProfile = userColumns.some((column) => column.name === 'profile');
+        if (hasUserTable && !hasProfile) {
+            sqlite.exec(`ALTER TABLE "User" ADD COLUMN "profile" TEXT`);
+        }
+    } finally {
+        sqlite.close();
+    }
+}
+
 export function getDemoClient() {
     if (!globalThis.__ZENSTACK_GRAPHQL_DEMO_CLIENT__) {
         globalThis.__ZENSTACK_GRAPHQL_DEMO_CLIENT__ = createClient();
@@ -33,15 +51,19 @@ export function getDemoClient() {
 }
 
 async function seedDemoDatabase(client: DemoClient) {
-    if ((await client.user.count()) > 0) {
-        return;
-    }
-
     const ada = await client.user.create({
         data: {
             name: 'Ada',
             age: 34,
             role: 'ADMIN',
+            profile: {
+                bio: 'Typescript developer and query planner',
+                interests: ['graphql', 'zenstack'],
+                location: {
+                    city: 'Boston',
+                    region: 'MA',
+                },
+            },
         },
     });
 
@@ -50,6 +72,14 @@ async function seedDemoDatabase(client: DemoClient) {
             name: 'Ben',
             age: 19,
             role: 'USER',
+            profile: {
+                bio: 'Frontend builder exploring adapters',
+                interests: ['react', 'sqlite'],
+                location: {
+                    city: 'New York',
+                    region: 'NY',
+                },
+            },
         },
     });
 
@@ -62,13 +92,29 @@ async function seedDemoDatabase(client: DemoClient) {
     });
 }
 
+function resetDemoSequences() {
+    const sqlite = new Database(DATABASE_PATH);
+    try {
+        sqlite.exec(`DELETE FROM sqlite_sequence WHERE name IN ('User', 'Post')`);
+    } finally {
+        sqlite.close();
+    }
+}
+
+async function reseedDemoDatabase(client: DemoClient) {
+    await client.post.deleteMany({});
+    await client.user.deleteMany({});
+    resetDemoSequences();
+    await seedDemoDatabase(client);
+}
+
 export async function ensureDemoDatabaseReady() {
     if (!globalThis.__ZENSTACK_GRAPHQL_DEMO_INIT__) {
         globalThis.__ZENSTACK_GRAPHQL_DEMO_INIT__ = (async () => {
+            await ensureDemoSchemaCompatibility();
             const client = getDemoClient();
-            await fs.mkdir(path.dirname(DATABASE_PATH), { recursive: true });
             await client.$pushSchema();
-            await seedDemoDatabase(client);
+            await reseedDemoDatabase(client);
         })();
     }
 
@@ -78,9 +124,7 @@ export async function ensureDemoDatabaseReady() {
 
 export async function resetDemoDatabase() {
     const client = await ensureDemoDatabaseReady();
-    await client.post.deleteMany({});
-    await client.user.deleteMany({});
-    await seedDemoDatabase(client);
+    await reseedDemoDatabase(client);
 }
 
 export async function getDemoSnapshot() {

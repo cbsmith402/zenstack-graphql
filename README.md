@@ -35,6 +35,8 @@ The generated schema uses Hasura-like defaults:
 
 - Query roots: `users`, `users_by_pk`, `users_aggregate`
 - Mutation roots: `insert_users`, `insert_users_one`, `update_users`, `update_users_by_pk`, `delete_users`, `delete_users_by_pk`
+- String filters include Hasura-style pattern operators like `_like`, `_nlike`, `_ilike`, and `_nilike`, plus extended prefix/suffix/contains variants
+- Provider-specific filters now include PostgreSQL scalar-list operators (`has`, `hasEvery`, `hasSome`, `isEmpty`) and ZenStack-style `Json` filters with JSON-path support
 - `insert_*` and `insert_*_one` support `on_conflict`
 - `*_insert_input` supports nested relation `data` inserts
 - `*_set_input` supports relation-aware updates for the nested mutation shapes supported by the underlying ZenStack ORM
@@ -44,6 +46,7 @@ The generated schema uses Hasura-like defaults:
 
 - The adapter accepts a normalized metadata object today so it can work as a standalone package before being wired into a full ZenStack V3 repository.
 - Delegates are expected to look Prisma-like (`findMany`, `findUnique`, `aggregate`, `create`, `update`, `delete`, and optional bulk variants).
+- Provider capabilities are normalized from the schema metadata so backend-specific filter behavior can be gated cleanly as the adapter grows.
 - Subscriptions and custom procedures are intentionally deferred.
 
 ## Next.js Demo

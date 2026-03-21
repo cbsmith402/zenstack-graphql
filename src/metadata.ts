@@ -6,6 +6,7 @@ import type {
     NormalizedFieldDefinition,
     NormalizedModelDefinition,
     NormalizedSchema,
+    ProviderCapabilities,
     UniqueConstraintDefinition,
     ZenStackSchemaLike,
 } from './types.js';
@@ -191,11 +192,33 @@ export function normalizeSchema(schema: ZenStackSchemaLike | ModelDefinition[]):
           );
 
     return {
-        provider: schemaInput.provider,
+        provider: schemaInput.provider
+            ? {
+                  type:
+                      typeof schemaInput.provider.type === 'string'
+                          ? schemaInput.provider.type.toLowerCase()
+                          : schemaInput.provider.type,
+              }
+            : undefined,
         models,
         modelMap: new Map(models.map((model) => [model.name, model])),
         enums,
         enumMap: new Map(enums.map((entry) => [entry.name, entry])),
+    };
+}
+
+export function getProviderType(schema: NormalizedSchema) {
+    return schema.provider?.type?.toLowerCase() ?? 'unknown';
+}
+
+export function getProviderCapabilities(schema: NormalizedSchema): ProviderCapabilities {
+    const provider = getProviderType(schema);
+    return {
+        provider,
+        supportsInsensitiveMode: provider !== 'sqlite',
+        supportsJsonFilters: provider !== 'unknown',
+        supportsJsonFilterMode: provider === 'postgresql',
+        supportsScalarListFilters: provider === 'postgresql',
     };
 }
 
