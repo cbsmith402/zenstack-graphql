@@ -118,6 +118,53 @@ export const sampleOperations = [
         variables: '{}',
     },
     {
+        label: 'Relation Update',
+        description: 'Update related records through parent and child mutation roots.',
+        query: `mutation RelationUpdate {
+  add_post: update_users(
+    where: { name: { _eq: "Ben" } }
+    _set: {
+      posts: {
+        create: [{ title: "Nested Create On Update", views: 4 }]
+      }
+    }
+  ) {
+    affected_rows
+    returning {
+      id
+      name
+      posts(order_by: [{ id: asc }]) {
+        id
+        title
+        views
+      }
+    }
+  }
+
+  rename_author: update_posts(
+    where: { title: { _eq: "GraphQL Adapter" } }
+    _set: {
+      author: {
+        update: {
+          _set: { name: "Ben Updated Through Post" }
+        }
+      }
+    }
+  ) {
+    affected_rows
+    returning {
+      id
+      title
+      author {
+        id
+        name
+      }
+    }
+  }
+}`,
+        variables: '{}',
+    },
+    {
         label: 'Filtered Search',
         description: 'Use Hasura-style filters against relation data in SQLite.',
         query: `query RelatedFilter {

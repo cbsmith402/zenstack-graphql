@@ -346,6 +346,147 @@ test('supports insert_many on_conflict upserts', async () => {
     assert.equal(store.users.find((user) => user.id === 3)?.name, 'Cara');
 });
 
+test('supports relationship-aware updates through mutation roots', async () => {
+    const { client, store } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => client,
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            mutation {
+                update_users_by_pk(
+                    id: 2
+                    _set: {
+                        posts: {
+                            create: [{ title: "Nested Create On Update", views: 4 }]
+                        }
+                    }
+                ) {
+                    id
+                    name
+                    posts(order_by: [{ id: asc }]) {
+                        id
+                        title
+                        views
+                    }
+                }
+                update_posts(
+                    where: { id: { _eq: 12 } }
+                    _set: {
+                        author: {
+                            update: {
+                                _set: { name: "Ben Updated Through Post" }
+                            }
+                        }
+                    }
+                ) {
+                    affected_rows
+                    returning {
+                        id
+                        author {
+                            id
+                            name
+                        }
+                    }
+                }
+                patch_user_posts: update_users(
+                    where: { id: { _eq: 1 } }
+                    _set: {
+                        posts: {
+                            update_many: [
+                                {
+                                    where: { id: { _eq: 10 } }
+                                    _set: { title: "ZenStack Advanced" }
+                                    _inc: { views: 10 }
+                                }
+                            ]
+                        }
+                    }
+                ) {
+                    affected_rows
+                    returning {
+                        id
+                        posts(order_by: [{ id: asc }]) {
+                            id
+                            title
+                            views
+                        }
+                    }
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        update_users_by_pk: {
+            id: 2,
+            name: 'Ben',
+            posts: [
+                { id: 12, title: 'GraphQL Adapter', views: 13 },
+                { id: 13, title: 'Nested Create On Update', views: 4 },
+            ],
+        },
+        update_posts: {
+            affected_rows: 1,
+            returning: [{ id: 12, author: { id: 2, name: 'Ben Updated Through Post' } }],
+        },
+        patch_user_posts: {
+            affected_rows: 1,
+            returning: [
+                {
+                    id: 1,
+                    posts: [
+                        { id: 10, title: 'ZenStack Advanced', views: 15 },
+                        { id: 11, title: 'Hasura Notes', views: 8 },
+                    ],
+                },
+            ],
+        },
+    });
+    assert.equal(store.users.find((user) => user.id === 2)?.name, 'Ben Updated Through Post');
+    assert.equal(store.posts.find((post) => post.id === 10)?.title, 'ZenStack Advanced');
+});
+
+test('only exposes by_pk roots for real primary keys', async () => {
+    const uniqueOnlySchema = {
+        models: [
+            {
+                name: 'EmailUser',
+                fields: [
+                    { name: 'email', kind: 'scalar', type: 'String', isUnique: true },
+                    { name: 'name', kind: 'scalar', type: 'String' },
+                ],
+            },
+        ],
+    } as const;
+
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: uniqueOnlySchema,
+        getClient: async () => ({
+            EmailUser: {
+                async findMany() {
+                    return [];
+                },
+            },
+            emailUser: {
+                async findMany() {
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.doesNotMatch(printed, /emailUsers_by_pk/);
+    assert.doesNotMatch(printed, /update_emailUsers_by_pk/);
+    assert.doesNotMatch(printed, /delete_emailUsers_by_pk/);
+    assert.match(printed, /insert_emailUsers_one\(object: EmailUser_insert_input!, on_conflict: EmailUser_on_conflict\)/);
+});
+
 test('invokes hooks and normalizes auth-like errors', async () => {
     const calls: string[] = [];
     const { client } = createInMemoryClient();

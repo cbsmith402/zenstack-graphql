@@ -518,7 +518,46 @@ function createUserDelegate(store: DataStore) {
             if (!entry) {
                 return null;
             }
-            applyDataPatch(entry as Record<string, unknown>, isRecord(args.data) ? args.data : {});
+            const data = isRecord(args.data) ? args.data : {};
+            const scalarData = Object.fromEntries(
+                Object.entries(data).filter(([key]) => key !== 'posts')
+            );
+            applyDataPatch(entry as Record<string, unknown>, scalarData);
+
+            if (isRecord(data.posts)) {
+                if (Array.isArray(data.posts.create)) {
+                    for (const row of data.posts.create) {
+                        if (!isRecord(row)) {
+                            continue;
+                        }
+                        store.posts.push({
+                            id: row.id === undefined ? nextId(store.posts) : Number(row.id),
+                            title: String(row.title),
+                            authorId: entry.id,
+                            views: row.views === undefined ? 0 : Number(row.views),
+                        });
+                    }
+                }
+
+                if (Array.isArray(data.posts.updateMany)) {
+                    for (const patch of data.posts.updateMany) {
+                        if (!isRecord(patch)) {
+                            continue;
+                        }
+                        const rows = store.posts.filter(
+                            (post) =>
+                                post.authorId === entry.id &&
+                                recordMatches(store, 'Post', post, patch.where as Record<string, unknown>)
+                        );
+                        for (const row of rows) {
+                            applyDataPatch(
+                                row as Record<string, unknown>,
+                                isRecord(patch.data) ? patch.data : {}
+                            );
+                        }
+                    }
+                }
+            }
             return applySelect(store, 'User', entry, args.select);
         },
         async updateMany(args: QueryArgs = {}) {
@@ -641,7 +680,35 @@ function createPostDelegate(store: DataStore) {
             if (!entry) {
                 return null;
             }
-            applyDataPatch(entry as Record<string, unknown>, isRecord(args.data) ? args.data : {});
+            const data = isRecord(args.data) ? args.data : {};
+            const scalarData = Object.fromEntries(
+                Object.entries(data).filter(([key]) => key !== 'author')
+            );
+            applyDataPatch(entry as Record<string, unknown>, scalarData);
+
+            if (isRecord(data.author)) {
+                if (isRecord(data.author.create)) {
+                    const author = data.author.create;
+                    const createdAuthor: UserRecord = {
+                        id: author.id === undefined ? nextId(store.users) : Number(author.id),
+                        name: String(author.name),
+                        age: Number(author.age),
+                        role: author.role === 'ADMIN' ? 'ADMIN' : 'USER',
+                    };
+                    store.users.push(createdAuthor);
+                    entry.authorId = createdAuthor.id;
+                }
+
+                if (isRecord(data.author.update)) {
+                    const author = store.users.find((user) => user.id === entry.authorId);
+                    if (author) {
+                        applyDataPatch(
+                            author as Record<string, unknown>,
+                            data.author.update as Record<string, unknown>
+                        );
+                    }
+                }
+            }
             return applySelect(store, 'Post', entry, args.select);
         },
         async updateMany(args: QueryArgs = {}) {

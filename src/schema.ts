@@ -26,7 +26,9 @@ import { normalizeError } from './errors.js';
 import { getExecutionClient, registerExecutionMetadata } from './execution.js';
 import {
     getIdentifierFields,
+    getPrimaryKeyFields,
     getScalarFields,
+    getUniqueFieldSets,
     isComparableScalar,
     isMutableField,
     isNumericScalar,
@@ -274,8 +276,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly orderInputs = new Map<string, GraphQLInputObjectType>();
     private readonly insertInputs = new Map<string, GraphQLInputObjectType>();
     private readonly relationInsertInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly relationUpdateInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly relationUpdateManyInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly scalarSetInputs = new Map<string, GraphQLInputObjectType>();
     private readonly setInputs = new Map<string, GraphQLInputObjectType>();
     private readonly incInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly nestedPatchInputs = new Map<string, GraphQLInputObjectType>();
     private readonly constraintEnums = new Map<string, GraphQLEnumType>();
     private readonly updateColumnEnums = new Map<string, GraphQLEnumType>();
     private readonly onConflictInputs = new Map<string, GraphQLInputObjectType>();
@@ -311,7 +317,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 }),
             };
 
-            if (getIdentifierFields(model).length > 0) {
+            if (getPrimaryKeyFields(model).length > 0) {
                 queryFields[this.naming.queryByPk(model)] = {
                     type: this.getModelObjectType(model),
                     description: `Fetch ${model.name} by primary key`,
@@ -402,7 +408,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 ),
             };
 
-            if (getIdentifierFields(model).length > 0) {
+            if (getPrimaryKeyFields(model).length > 0) {
                 mutationFields[this.naming.updateByPk(model)] = {
                     type: this.getModelObjectType(model),
                     args: {
@@ -703,7 +709,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
         const input = new GraphQLInputObjectType({
             name: `${this.naming.typeName(model.name)}_set_input`,
-            fields: () => this.getMutableInputFields(model),
+            fields: () => this.getUpdateInputFields(model),
         });
 
         this.setInputs.set(model.name, input);
@@ -857,6 +863,85 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return input;
     }
 
+    private getNestedPatchInput(model: NormalizedModelDefinition) {
+        const existing = this.nestedPatchInputs.get(model.name);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: `${this.naming.typeName(model.name)}_nested_update_input`,
+            fields: () => ({
+                _set: { type: this.getScalarSetInputObject(model) },
+                _inc: { type: this.getIncInput(model) },
+            }),
+        });
+
+        this.nestedPatchInputs.set(model.name, input);
+        return input;
+    }
+
+    private getRelationUpdateManyInput(relatedModel: NormalizedModelDefinition) {
+        const existing = this.relationUpdateManyInputs.get(relatedModel.name);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: `${this.naming.typeName(relatedModel.name)}_rel_update_many_input`,
+            fields: () => ({
+                where: { type: new GraphQLNonNull(this.getWhereInput(relatedModel)) },
+                _set: { type: this.getScalarSetInputObject(relatedModel) },
+                _inc: { type: this.getIncInput(relatedModel) },
+            }),
+        });
+
+        this.relationUpdateManyInputs.set(relatedModel.name, input);
+        return input;
+    }
+
+    private getRelationUpdateInput(
+        model: NormalizedModelDefinition,
+        relationField: NormalizedFieldDefinition
+    ) {
+        const key = `${model.name}:${relationField.name}`;
+        const existing = this.relationUpdateInputs.get(key);
+        if (existing) {
+            return existing;
+        }
+
+        const relatedModel = this.getModel(relationField.type);
+        const input = new GraphQLInputObjectType({
+            name: `${this.naming.typeName(model.name)}_${relationField.name}_rel_update_input`,
+            fields: () => {
+                const fields: GraphQLInputFieldConfigMap = {
+                    create: {
+                        type: relationField.isList
+                            ? new GraphQLList(new GraphQLNonNull(this.getInsertInput(relatedModel)))
+                            : this.getInsertInput(relatedModel),
+                    },
+                };
+
+                if (relationField.isList) {
+                    fields.update_many = {
+                        type: new GraphQLList(
+                            new GraphQLNonNull(this.getRelationUpdateManyInput(relatedModel))
+                        ),
+                    };
+                } else {
+                    fields.update = {
+                        type: this.getNestedPatchInput(relatedModel),
+                    };
+                }
+
+                return fields;
+            },
+        });
+
+        this.relationUpdateInputs.set(key, input);
+        return input;
+    }
+
     private getInsertInputFields(model: NormalizedModelDefinition) {
         const fields = this.getMutableInputFields(model);
         for (const field of this.getVisibleFields(model)) {
@@ -872,7 +957,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return fields;
     }
 
-    private getMutableInputFields(model: NormalizedModelDefinition) {
+    private getScalarSetInputFields(model: NormalizedModelDefinition) {
         const fields: GraphQLInputFieldConfigMap = {};
         for (const field of this.getMutableFields(model)) {
             const outputType =
@@ -888,9 +973,43 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return fields;
     }
 
+    private getScalarSetInputObject(model: NormalizedModelDefinition) {
+        const existing = this.scalarSetInputs.get(model.name);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: `${this.naming.typeName(model.name)}_scalar_set_input`,
+            fields: () => this.getScalarSetInputFields(model),
+        });
+
+        this.scalarSetInputs.set(model.name, input);
+        return input;
+    }
+
+    private getUpdateInputFields(model: NormalizedModelDefinition) {
+        const fields = this.getScalarSetInputFields(model);
+        for (const field of this.getVisibleFields(model)) {
+            if (field.kind !== 'relation') {
+                continue;
+            }
+
+            fields[field.name] = {
+                type: this.getRelationUpdateInput(model, field),
+                description: field.description,
+            };
+        }
+        return fields;
+    }
+
+    private getMutableInputFields(model: NormalizedModelDefinition) {
+        return this.getScalarSetInputFields(model);
+    }
+
     private getPrimaryKeyArgs(model: NormalizedModelDefinition): GraphQLFieldConfigArgumentMap {
         const args: GraphQLFieldConfigArgumentMap = {};
-        for (const fieldName of getIdentifierFields(model)) {
+        for (const fieldName of getPrimaryKeyFields(model)) {
             const field = model.fieldMap.get(fieldName);
             if (!field) {
                 continue;
@@ -904,6 +1023,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             };
         }
         return args;
+    }
+
+    private getIdentitySelection(model: NormalizedModelDefinition) {
+        return Object.fromEntries(
+            Array.from(new Set(getUniqueFieldSets(model).flat())).map((fieldName) => [fieldName, true])
+        );
     }
 
     private getModelObjectType(model: NormalizedModelDefinition) {
@@ -1801,7 +1926,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     }
 
     private buildUniqueWhere(model: NormalizedModelDefinition, args: Record<string, unknown>) {
-        const fields = getIdentifierFields(model);
+        const fields = getPrimaryKeyFields(model);
         return Object.fromEntries(fields.map((fieldName) => [fieldName, args[fieldName]]));
     }
 
@@ -1809,36 +1934,20 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         model: NormalizedModelDefinition,
         record: Record<string, unknown>
     ) {
-        const fields = getIdentifierFields(model);
-        if (fields.length === 0) {
-            return undefined;
+        for (const fields of getUniqueFieldSets(model)) {
+            const values = fields.map((field) => record[field]);
+            if (values.some((value) => value === undefined)) {
+                continue;
+            }
+
+            return Object.fromEntries(fields.map((field) => [field, record[field]]));
         }
 
-        const values = fields.map((field) => record[field]);
-        if (values.some((value) => value === undefined)) {
-            return undefined;
-        }
-
-        return Object.fromEntries(fields.map((field) => [field, record[field]]));
+        return undefined;
     }
 
     private buildMutationData(args: Record<string, unknown>) {
-        const data: Record<string, unknown> = {};
-        if (isPlainObject(args._set)) {
-            Object.assign(data, args._set);
-        }
-
-        if (isPlainObject(args._inc)) {
-            for (const [field, value] of Object.entries(args._inc)) {
-                data[field] = { increment: value };
-            }
-        }
-
-        if (Object.keys(data).length === 0) {
-            throw new Error('At least one of "_set" or "_inc" must be provided');
-        }
-
-        return data;
+        return args;
     }
 
     private compileInsertData(
@@ -1888,6 +1997,96 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return Object.keys(input).some((fieldName) => {
             const field = model.fieldMap.get(fieldName);
             return field?.kind === 'relation' && isPlainObject(input[fieldName]);
+        });
+    }
+
+    private compileUpdateData(
+        model: NormalizedModelDefinition,
+        args: Record<string, unknown>
+    ): Record<string, unknown> {
+        const data: Record<string, unknown> = {};
+        const setInput = isPlainObject(args._set) ? args._set : undefined;
+        if (setInput) {
+            for (const [fieldName, value] of Object.entries(setInput)) {
+                const field = model.fieldMap.get(fieldName);
+                if (!field || value === undefined) {
+                    continue;
+                }
+
+                if (field.kind !== 'relation') {
+                    data[fieldName] = value;
+                    continue;
+                }
+
+                if (!isPlainObject(value)) {
+                    continue;
+                }
+
+                const relatedModel = this.getModel(field.type);
+                if (field.isList) {
+                    const nestedCreate = Array.isArray(value.create)
+                        ? value.create
+                              .filter((entry): entry is Record<string, unknown> => isPlainObject(entry))
+                              .map((entry) => this.compileInsertData(relatedModel, entry))
+                        : [];
+                    const nestedUpdateMany = Array.isArray(value.update_many)
+                        ? value.update_many
+                              .filter((entry): entry is Record<string, unknown> => isPlainObject(entry))
+                              .map((entry) => ({
+                                  where: this.toWhere(relatedModel, entry.where),
+                                  data: this.compileUpdateData(relatedModel, entry),
+                              }))
+                        : [];
+
+                    if (nestedCreate.length > 0 || nestedUpdateMany.length > 0) {
+                        data[fieldName] = {
+                            ...(nestedCreate.length > 0 ? { create: nestedCreate } : {}),
+                            ...(nestedUpdateMany.length > 0
+                                ? { updateMany: nestedUpdateMany }
+                                : {}),
+                        };
+                    }
+                    continue;
+                }
+
+                const nested: Record<string, unknown> = {};
+                if (isPlainObject(value.create)) {
+                    nested.create = this.compileInsertData(relatedModel, value.create);
+                }
+                if (isPlainObject(value.update)) {
+                    nested.update = this.compileUpdateData(relatedModel, value.update);
+                }
+                if (Object.keys(nested).length > 0) {
+                    data[fieldName] = nested;
+                }
+            }
+        }
+
+        if (isPlainObject(args._inc)) {
+            for (const [field, value] of Object.entries(args._inc)) {
+                data[field] = { increment: value };
+            }
+        }
+
+        if (Object.keys(data).length === 0) {
+            throw new Error('At least one of "_set" or "_inc" must be provided');
+        }
+
+        return data;
+    }
+
+    private hasNestedUpdateData(
+        model: NormalizedModelDefinition,
+        args: Record<string, unknown>
+    ) {
+        const setInput = isPlainObject(args._set) ? args._set : undefined;
+        if (!setInput) {
+            return false;
+        }
+
+        return Object.keys(setInput).some((fieldName) => {
+            const field = model.fieldMap.get(fieldName);
+            return field?.kind === 'relation' && isPlainObject(setInput[fieldName]);
         });
     }
 
@@ -2300,25 +2499,22 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     ) {
         const delegate = this.getRequiredDelegate(client, model);
         const where = this.toWhere(model, args.where);
-        const data = this.buildMutationData(args);
+        const data = this.compileUpdateData(model, this.buildMutationData(args));
         const returningSelection = this.getReturningSelection(model, info);
         const wantsReturning = Boolean(returningSelection);
+        const hasNestedData = this.hasNestedUpdateData(model, args);
 
-        if (!wantsReturning && delegate.updateMany) {
+        if (!wantsReturning && delegate.updateMany && !hasNestedData) {
             const result = await delegate.updateMany({ where, data });
             return { affected_rows: result.count, returning: [] };
         }
 
         this.assertMethod(delegate, 'findMany', model);
         this.assertMethod(delegate, 'update', model);
-        const identifierFields = getIdentifierFields(model);
-        if (identifierFields.length === 0) {
+        const identitySelection = this.getIdentitySelection(model);
+        if (Object.keys(identitySelection).length === 0) {
             throw new Error(`Model "${model.name}" requires a primary key or unique field for update returning`);
         }
-
-        const identitySelection = Object.fromEntries(
-            identifierFields.map((fieldName) => [fieldName, true])
-        );
         const rows = await delegate.findMany!({
             where,
             select: identitySelection,
@@ -2351,7 +2547,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         const delegate = this.getRequiredDelegate(client, model);
         this.assertMethod(delegate, 'update', model);
         const where = this.buildUniqueWhere(model, args);
-        const data = this.buildMutationData(args);
+        const data = this.compileUpdateData(model, this.buildMutationData(args));
 
         if (delegate.findUnique) {
             const existing = await delegate.findUnique({ where, select: { ...where } });
@@ -2385,14 +2581,10 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
         this.assertMethod(delegate, 'findMany', model);
         this.assertMethod(delegate, 'delete', model);
-        const identifierFields = getIdentifierFields(model);
-        if (identifierFields.length === 0) {
+        const identitySelection = this.getIdentitySelection(model);
+        if (Object.keys(identitySelection).length === 0) {
             throw new Error(`Model "${model.name}" requires a primary key or unique field for delete returning`);
         }
-
-        const identitySelection = Object.fromEntries(
-            identifierFields.map((fieldName) => [fieldName, true])
-        );
         const rows = await delegate.findMany!({
             where,
             select: wantsReturning

@@ -212,6 +212,31 @@ export function getIdentifierFields(model: NormalizedModelDefinition): string[] 
     return model.fields.filter((field) => field.isId || field.isUnique).map((field) => field.name);
 }
 
+export function getPrimaryKeyFields(model: NormalizedModelDefinition): string[] {
+    return model.primaryKey;
+}
+
+export function getUniqueFieldSets(model: NormalizedModelDefinition): string[][] {
+    const result: string[][] = [];
+    if (model.primaryKey.length > 0) {
+        result.push(model.primaryKey);
+    }
+
+    for (const constraint of model.uniqueConstraints) {
+        result.push(constraint.fields);
+    }
+
+    const seen = new Set<string>();
+    return result.filter((fields) => {
+        const key = fields.join('|');
+        if (!key || seen.has(key)) {
+            return false;
+        }
+        seen.add(key);
+        return true;
+    });
+}
+
 export function getScalarFields(model: NormalizedModelDefinition) {
     return model.fields.filter((field) => field.kind === 'scalar' || field.kind === 'enum');
 }

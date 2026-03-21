@@ -37,6 +37,8 @@ The generated schema uses Hasura-like defaults:
 - Mutation roots: `insert_users`, `insert_users_one`, `update_users`, `update_users_by_pk`, `delete_users`, `delete_users_by_pk`
 - `insert_*` and `insert_*_one` support `on_conflict`
 - `*_insert_input` supports nested relation `data` inserts
+- `*_set_input` supports relation-aware updates for the nested mutation shapes supported by the underlying ZenStack ORM
+- `*_by_pk` roots are emitted only for real primary keys
 
 ## Notes
 
