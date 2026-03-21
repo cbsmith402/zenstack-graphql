@@ -3,7 +3,12 @@ import { test } from 'node:test';
 
 import { GraphQLString } from 'graphql';
 
-import { createZenStackGraphQLSchema, graphql, printSchema } from '../src/index.js';
+import {
+    createZenStackGraphQLSchema,
+    createZenStackGraphQLSchemaFactory,
+    graphql,
+    printSchema,
+} from '../src/index.js';
 import type { ModelDefinition, ModelDelegate, ZenStackClientLike } from '../src/index.js';
 import { createInMemoryClient, schema } from './helpers.js';
 
@@ -456,6 +461,126 @@ test('prunes nested relation mutation inputs when related operations are sliced 
     assert.doesNotMatch(printed, /input User_set_input[\s\S]*posts:/);
     assert.doesNotMatch(printed, /insert_posts_one/);
     assert.doesNotMatch(printed, /update_posts_by_pk/);
+});
+
+test('creates and caches pruned schemas per role with the schema factory', async () => {
+    const { client } = createInMemoryClient();
+    const factory = createZenStackGraphQLSchemaFactory({
+        schema,
+        getClient: async () => client,
+        getSlicing(context: { role: 'admin' | 'user' }) {
+            if (context.role === 'admin') {
+                return undefined;
+            }
+
+            return {
+                models: {
+                    user: {
+                        excludedFields: ['age'],
+                        excludedOperations: ['deleteMany', 'deleteByPk'],
+                    },
+                },
+            };
+        },
+        getCacheKey({ context }) {
+            return context.role;
+        },
+    });
+
+    const adminSchema = await factory.getSchema({ role: 'admin' });
+    const adminSchemaAgain = await factory.getSchema({ role: 'admin' });
+    const userSchema = await factory.getSchema({ role: 'user' });
+
+    assert.equal(adminSchema, adminSchemaAgain);
+    assert.notEqual(adminSchema, userSchema);
+
+    const adminPrinted = printSchema(adminSchema);
+    const userPrinted = printSchema(userSchema);
+
+    assert.match(adminPrinted, /age: Int!/);
+    assert.match(adminPrinted, /delete_users_by_pk\(id: Int!/);
+    assert.doesNotMatch(userPrinted, /age: Int!/);
+    assert.doesNotMatch(userPrinted, /delete_users_by_pk\(id: Int!/);
+});
+
+test('executes requests against the role-specific pruned schema factory', async () => {
+    const { client } = createInMemoryClient();
+    const factory = createZenStackGraphQLSchemaFactory({
+        schema,
+        getClient: async () => client,
+        getSlicing(context: { role: 'admin' | 'user' }) {
+            return context.role === 'user'
+                ? {
+                      models: {
+                          user: {
+                              excludedFields: ['age'],
+                          },
+                      },
+                  }
+                : undefined;
+        },
+        getCacheKey({ context }) {
+            return context.role;
+        },
+    });
+
+    const userResult = await factory.execute({
+        contextValue: { role: 'user' },
+        source: `
+            query {
+                users(order_by: [{ id: asc }]) {
+                    id
+                    name
+                }
+            }
+        `,
+    });
+
+    assert.equal(userResult.errors, undefined);
+    assert.deepEqual(toPlain(userResult.data), {
+        users: [
+            { id: 1, name: 'Ada' },
+            { id: 2, name: 'Ben' },
+        ],
+    });
+
+    const userAgeResult = await factory.execute({
+        contextValue: { role: 'user' },
+        source: `
+            query {
+                users {
+                    id
+                    age
+                }
+            }
+        `,
+    });
+
+    assert.ok(userAgeResult.errors);
+    assert.match(
+        userAgeResult.errors[0]?.message ?? '',
+        /Cannot query field "age" on type "User"/
+    );
+
+    const adminAgeResult = await factory.execute({
+        contextValue: { role: 'admin' },
+        source: `
+            query {
+                users(order_by: [{ id: asc }]) {
+                    id
+                    age
+                }
+            }
+        `,
+    });
+
+    assert.equal(adminAgeResult.errors, undefined);
+    assert.deepEqual(toPlain(adminAgeResult.data), {
+        users: [
+            { id: 1, age: 34 },
+            { id: 2, age: 19 },
+        ],
+    });
 });
 
 test('executes nested reads and aggregates with Hasura-like args', async () => {

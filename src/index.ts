@@ -1,8 +1,13 @@
 export { GraphQLNonNull, GraphQLString, printSchema } from 'graphql';
 export { graphql } from './execution.js';
+export { createZenStackGraphQLSchemaFactory } from './schema-factory.js';
 export { createZenStackGraphQLSchema } from './schema.js';
 export { normalizeSchema } from './metadata.js';
 export { normalizeError } from './errors.js';
+export type {
+    CreateZenStackGraphQLSchemaFactoryOptions,
+    ZenStackGraphQLSchemaFactory,
+} from './schema-factory.js';
 export type {
     CreateZenStackGraphQLSchemaOptions,
     EnumDefinition,

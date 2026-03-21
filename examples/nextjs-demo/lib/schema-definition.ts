@@ -227,6 +227,18 @@ export const sampleOperations = [
         variables: '{}',
     },
     {
+        label: 'Role-pruned Query',
+        description:
+            'Switch the playground role to "user" and rerun this query to see the age field disappear from the generated schema and validation.',
+        query: `query RolePrunedQuery {
+  users(order_by: [{ id: asc }]) {
+    id
+    name
+  }
+}`,
+        variables: '{}',
+    },
+    {
         label: 'Relation Aggregate',
         description: 'Query Hasura-style relation aggregate fields generated from the ZenStack models.',
         query: `query RelationAggregate {

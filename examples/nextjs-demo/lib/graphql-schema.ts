@@ -1,17 +1,43 @@
 import {
     GraphQLNonNull,
     GraphQLString,
-    createZenStackGraphQLSchema,
+    createZenStackGraphQLSchemaFactory,
     printSchema,
 } from 'zenstack-graphql';
 
 import { ensureDemoDatabaseReady } from './zenstack-demo';
 import { schema } from '@/zenstack/schema';
 
-export const graphqlSchema = createZenStackGraphQLSchema({
+export type DemoRole = 'admin' | 'user';
+
+export const DEFAULT_DEMO_ROLE: DemoRole = 'admin';
+export const DEMO_ROLE_HEADER = 'x-hasura-role';
+
+export function normalizeDemoRole(input: string | null | undefined): DemoRole {
+    return input?.toLowerCase() === 'user' ? 'user' : DEFAULT_DEMO_ROLE;
+}
+
+export const graphqlSchemaFactory = createZenStackGraphQLSchemaFactory({
     schema,
     async getClient() {
         return ensureDemoDatabaseReady();
+    },
+    getSlicing(context: { role: DemoRole }) {
+        if (context.role !== 'user') {
+            return undefined;
+        }
+
+        return {
+            models: {
+                user: {
+                    excludedFields: ['age'],
+                    excludedOperations: ['deleteMany', 'deleteByPk'],
+                },
+            },
+        };
+    },
+    getCacheKey({ context }) {
+        return context.role;
     },
     extensions: {
         query: {
@@ -34,4 +60,6 @@ export const graphqlSchema = createZenStackGraphQLSchema({
     },
 });
 
-export const graphqlSchemaSDL = printSchema(graphqlSchema);
+export async function getGraphqlSchemaSDL(role: DemoRole = DEFAULT_DEMO_ROLE) {
+    return printSchema(await graphqlSchemaFactory.getSchema({ role }));
+}

@@ -16,6 +16,7 @@ type Snapshot = {
 
 type PlaygroundProps = {
     samples: SampleOperation[];
+    initialRole: 'admin' | 'user';
     initialSchema: string;
     initialSnapshot: Snapshot;
     initialZModel: string;
@@ -23,12 +24,15 @@ type PlaygroundProps = {
 
 export function Playground({
     samples,
+    initialRole,
     initialSchema,
     initialSnapshot,
     initialZModel,
 }: PlaygroundProps) {
     const [query, setQuery] = useState(samples[0]?.query ?? '');
     const [variables, setVariables] = useState(samples[0]?.variables ?? '{}');
+    const [role, setRole] = useState<'admin' | 'user'>(initialRole);
+    const [schemaSDL, setSchemaSDL] = useState(initialSchema);
     const [result, setResult] = useState<string>('Run a query to see the JSON response.');
     const [snapshot, setSnapshot] = useState<Snapshot>(initialSnapshot);
     const [status, setStatus] = useState('Ready');
@@ -40,6 +44,16 @@ export function Playground({
         setSnapshot(payload.snapshot);
     }
 
+    async function refreshSchema(nextRole: 'admin' | 'user') {
+        const response = await fetch('/api/schema', {
+            headers: {
+                'x-hasura-role': nextRole,
+            },
+        });
+        const payload = await response.text();
+        setSchemaSDL(payload);
+    }
+
     function applySample(sample: SampleOperation) {
         setQuery(sample.query);
         setVariables(sample.variables);
@@ -48,13 +62,14 @@ export function Playground({
 
     async function runQuery() {
         startTransition(async () => {
-            setStatus('Running GraphQL request...');
+            setStatus(`Running GraphQL request as ${role}...`);
             try {
                 const parsedVariables = variables.trim() ? JSON.parse(variables) : {};
                 const response = await fetch('/api/graphql', {
                     method: 'POST',
                     headers: {
                         'content-type': 'application/json',
+                        'x-hasura-role': role,
                     },
                     body: JSON.stringify({
                         query,
@@ -83,6 +98,21 @@ export function Playground({
         });
     }
 
+    function changeRole(nextRole: 'admin' | 'user') {
+        startTransition(async () => {
+            setRole(nextRole);
+            setStatus(`Switching schema to ${nextRole} role...`);
+            try {
+                await refreshSchema(nextRole);
+                setStatus(`Loaded the ${nextRole} schema.`);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Unknown schema refresh failure';
+                setResult(JSON.stringify({ error: message }, null, 2));
+                setStatus('Failed to refresh the role-specific schema.');
+            }
+        });
+    }
+
     return (
         <div className="shell">
             <section className="hero">
@@ -93,13 +123,14 @@ export function Playground({
                         <p>
                             This sample wraps the local <code>zenstack-graphql</code> package in a
                             Next.js App Router project. The API route runs against a real ZenStack
-                            schema backed by SQLite, so you can try queries, mutations, and
-                            transaction rollbacks end to end.
+                            schema backed by SQLite, so you can try queries, mutations, transaction
+                            rollbacks, and Hasura-style role-based schema pruning end to end.
                         </p>
                         <div className="pill-row">
                             <span className="pill">Hasura-style root fields</span>
                             <span className="pill">Nested relation reads</span>
                             <span className="pill">Aggregates + CRUD mutations</span>
+                            <span className="pill">Header-based role slicing</span>
                         </div>
                     </div>
                     <div className="card pad">
@@ -127,7 +158,7 @@ npm run dev`}</pre>
                 <div className="meta-box">
                     <strong>Schema SDL</strong>
                     <span className="muted">
-                        GET <code>/api/schema</code>
+                        GET <code>/api/schema</code> with <code>x-hasura-role</code>
                     </span>
                 </div>
                 <div className="meta-box">
@@ -149,6 +180,15 @@ npm run dev`}</pre>
                     <div className="panel-header">
                         <h2>Playground</h2>
                         <div className="button-row">
+                            <select
+                                className="button secondary"
+                                value={role}
+                                onChange={(event) => changeRole(event.target.value as 'admin' | 'user')}
+                                disabled={isPending}
+                            >
+                                <option value="admin">Role: admin</option>
+                                <option value="user">Role: user</option>
+                            </select>
                             <button className="button secondary" onClick={resetData} disabled={isPending}>
                                 Reset Data
                             </button>
@@ -158,7 +198,7 @@ npm run dev`}</pre>
                         </div>
                     </div>
 
-                    <div className={`status ${status.includes('successfully') ? 'success' : ''}`}>
+                    <div className={`status ${status.includes('successfully') || status.startsWith('Loaded the') ? 'success' : ''}`}>
                         {status}
                     </div>
 
@@ -190,6 +230,7 @@ npm run dev`}</pre>
                         <div>
                             <div className="editor-label">
                                 <span>Result</span>
+                                <span className="muted">Header: x-hasura-role = {role}</span>
                             </div>
                             <pre className="result">{result}</pre>
                         </div>
@@ -236,7 +277,10 @@ npm run dev`}</pre>
                         <div className="panel-header">
                             <h3>Generated Schema</h3>
                         </div>
-                        <pre className="code-block">{initialSchema}</pre>
+                        <p className="muted">
+                            Current role: <code>{role}</code>
+                        </p>
+                        <pre className="code-block">{schemaSDL}</pre>
                     </div>
                 </div>
             </section>

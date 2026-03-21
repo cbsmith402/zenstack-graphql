@@ -28,6 +28,7 @@ const schema = createZenStackGraphQLSchema({
 ## Public API
 
 - `createZenStackGraphQLSchema({ schema, getClient, naming, features, slicing, scalars, hooks, extensions })`
+- `createZenStackGraphQLSchemaFactory({ schema, getClient, getSlicing, getCacheKey, ... })`
 - `normalizeSchema(schema)`
 - `normalizeError(error)`
 
@@ -42,9 +43,47 @@ The generated schema uses Hasura-like defaults:
 - `*_set_input` supports relation-aware updates for the nested mutation shapes supported by the underlying ZenStack ORM
 - `features.computedFields` enables read-only `@computed` fields detected from ZenStack-generated metadata
 - `slicing` supports schema pruning with ZenStack-style model, operation, procedure, and filter slicing, plus GraphQL field visibility pruning for role-specific schemas
+- `createZenStackGraphQLSchemaFactory` caches one generated schema per slice key, which makes role-aware introspection and execution much easier
 - ZModel `procedure` and `mutation procedure` definitions are exposed as GraphQL query and mutation roots via `client.$procs`
 - `extensions.query` and `extensions.mutation` let you attach manual GraphQL root fields that receive the same request-scoped ZenStack client as generated resolvers
 - `*_by_pk` roots are emitted only for real primary keys
+
+## Role-aware schemas
+
+If you want different GraphQL schemas per role, use the schema factory and derive `slicing`
+from request context.
+
+```ts
+import {
+    createZenStackGraphQLSchemaFactory,
+} from 'zenstack-graphql';
+
+const factory = createZenStackGraphQLSchemaFactory({
+    schema,
+    getClient: async (context) => context.db,
+    getSlicing(context) {
+        return context.role === 'admin'
+            ? undefined
+            : {
+                  models: {
+                      user: {
+                          excludedFields: ['age'],
+                          excludedOperations: ['deleteMany', 'deleteByPk'],
+                      },
+                  },
+              };
+    },
+    getCacheKey({ context }) {
+        return context.role;
+    },
+});
+
+const graphqlSchema = await factory.getSchema(context);
+const result = await factory.execute({
+    contextValue: context,
+    source: '{ users { id name } }',
+});
+```
 
 ## Notes
 
@@ -59,7 +98,8 @@ A runnable sample app lives in `examples/nextjs-demo`.
 
 It now uses a real ZenStack schema at `examples/nextjs-demo/zenstack/schema.zmodel`, generates the
 typed ZenStack schema with `zenstack generate`, boots a SQLite database, and serves the local
-GraphQL adapter through a Next.js API route.
+GraphQL adapter through a Next.js API route. The demo also supports Hasura-style role selection
+with the `x-hasura-role` header and swaps between cached pruned schemas in the browser.
 
 ```bash
 cd examples/nextjs-demo
