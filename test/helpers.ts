@@ -480,7 +480,7 @@ function createUserDelegate(store: DataStore) {
                     continue;
                 }
                 store.users.push({
-                    id: Number(row.id),
+                    id: row.id === undefined ? nextId(store.users) : Number(row.id),
                     name: String(row.name),
                     age: Number(row.age),
                     role: row.role === 'ADMIN' ? 'ADMIN' : 'USER',
@@ -496,7 +496,7 @@ function createUserDelegate(store: DataStore) {
                     continue;
                 }
                 const record: UserRecord = {
-                    id: Number(row.id),
+                    id: row.id === undefined ? nextId(store.users) : Number(row.id),
                     name: String(row.name),
                     age: Number(row.age),
                     role: row.role === 'ADMIN' ? 'ADMIN' : 'USER',
@@ -642,10 +642,10 @@ function createPostDelegate(store: DataStore) {
                     continue;
                 }
                 store.posts.push({
-                    id: Number(row.id),
+                    id: row.id === undefined ? nextId(store.posts) : Number(row.id),
                     title: String(row.title),
                     authorId: Number(row.authorId),
-                    views: Number(row.views),
+                    views: row.views === undefined ? 0 : Number(row.views),
                 });
             }
             return { count: rows.length };
@@ -658,10 +658,10 @@ function createPostDelegate(store: DataStore) {
                     continue;
                 }
                 const record: PostRecord = {
-                    id: Number(row.id),
+                    id: row.id === undefined ? nextId(store.posts) : Number(row.id),
                     title: String(row.title),
                     authorId: Number(row.authorId),
-                    views: Number(row.views),
+                    views: row.views === undefined ? 0 : Number(row.views),
                 };
                 store.posts.push(record);
                 created.push(applySelect(store, 'Post', record, args.select));
