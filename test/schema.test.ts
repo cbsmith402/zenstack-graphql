@@ -40,6 +40,122 @@ test('generates Hasura-style root fields and types', async () => {
     assert.match(printed, /_nicontains: String/);
 });
 
+test('supports computed fields from generated zenstack metadata when enabled', async () => {
+    let capturedArgs: Record<string, unknown> | undefined;
+    const generatedSchemaLike = {
+        models: {
+            User: {
+                fields: {
+                    id: {
+                        name: 'id',
+                        type: 'Int',
+                        id: true,
+                    },
+                    name: {
+                        name: 'name',
+                        type: 'String',
+                    },
+                    postCount: {
+                        name: 'postCount',
+                        type: 'Int',
+                        attributes: [{ name: '@computed' }],
+                    },
+                },
+                idFields: ['id'],
+                uniqueFields: {
+                    id: { type: 'Int' },
+                },
+            },
+        },
+    };
+
+    const disabledSchema = createZenStackGraphQLSchema({
+        schema: generatedSchemaLike,
+        getClient: async () => ({
+            User: {
+                async findMany() {
+                    return [];
+                },
+            },
+            user: {
+                async findMany() {
+                    return [];
+                },
+            },
+        }),
+    });
+    const disabledPrinted = printSchema(disabledSchema);
+    assert.doesNotMatch(disabledPrinted, /postCount: Int!/);
+    assert.doesNotMatch(disabledPrinted, /postCount/);
+
+    const enabledSchema = createZenStackGraphQLSchema({
+        schema: generatedSchemaLike,
+        features: {
+            computedFields: true,
+        },
+        getClient: async () => ({
+            User: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedArgs = args;
+                    return [{ id: 1, name: 'Ada', postCount: 2 }];
+                },
+            },
+            user: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedArgs = args;
+                    return [{ id: 1, name: 'Ada', postCount: 2 }];
+                },
+            },
+        }),
+    });
+
+    const enabledPrinted = printSchema(enabledSchema);
+    assert.match(enabledPrinted, /postCount: Int!/);
+    assert.match(enabledPrinted, /input User_bool_exp[\s\S]*postCount: Int_comparison_exp/);
+    assert.match(enabledPrinted, /input User_order_by[\s\S]*postCount: order_by/);
+    assert.doesNotMatch(enabledPrinted, /input User_insert_input[\s\S]*postCount:/);
+    assert.doesNotMatch(enabledPrinted, /input User_set_input[\s\S]*postCount:/);
+
+    const result = await graphql({
+        schema: enabledSchema,
+        source: `
+            query {
+                users(
+                    where: { postCount: { _gt: 1 } }
+                    order_by: [{ postCount: desc }]
+                ) {
+                    id
+                    name
+                    postCount
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        users: [{ id: 1, name: 'Ada', postCount: 2 }],
+    });
+    assert.deepEqual(capturedArgs, {
+        where: {
+            postCount: {
+                gt: 1,
+            },
+        },
+        orderBy: {
+            postCount: 'desc',
+        },
+        distinct: undefined,
+        take: undefined,
+        skip: undefined,
+        select: {
+            id: true,
+            name: true,
+            postCount: true,
+        },
+    });
+});
+
 test('executes nested reads and aggregates with Hasura-like args', async () => {
     const { client } = createInMemoryClient();
     const graphqlSchema = createZenStackGraphQLSchema({

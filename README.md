@@ -40,6 +40,7 @@ The generated schema uses Hasura-like defaults:
 - `insert_*` and `insert_*_one` support `on_conflict`
 - `*_insert_input` supports nested relation `data` inserts
 - `*_set_input` supports relation-aware updates for the nested mutation shapes supported by the underlying ZenStack ORM
+- `features.computedFields` enables read-only `@computed` fields detected from ZenStack-generated metadata
 - `*_by_pk` roots are emitted only for real primary keys
 
 ## Notes

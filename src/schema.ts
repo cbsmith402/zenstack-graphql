@@ -28,7 +28,6 @@ import {
     getIdentifierFields,
     getPrimaryKeyFields,
     getProviderCapabilities,
-    getScalarFields,
     getUniqueFieldSets,
     isComparableScalar,
     isMutableField,
@@ -515,6 +514,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         );
     }
 
+    private getVisibleScalarFields(model: NormalizedModelDefinition) {
+        return this.getVisibleFields(model).filter(
+            (field) => field.kind === 'scalar' || field.kind === 'enum'
+        );
+    }
+
     private getEnumType(name: string) {
         const existing = this.enumTypes.get(name);
         if (existing) {
@@ -546,7 +551,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         const enumType = new GraphQLEnumType({
             name: `${this.naming.typeName(model.name)}_select_column`,
             values: Object.fromEntries(
-                getScalarFields(model).map((field) => [field.name, { value: field.name }])
+                this.getVisibleScalarFields(model).map((field) => [field.name, { value: field.name }])
             ),
         });
 
@@ -1174,7 +1179,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             name: `${this.naming.typeName(model.name)}_${suffix}_fields`,
             fields: () => {
                 const fields: GraphQLFieldConfigMap<unknown, TContext> = {};
-                for (const field of getScalarFields(model)) {
+                for (const field of this.getVisibleScalarFields(model)) {
                     if (field.kind !== 'scalar') {
                         continue;
                     }
@@ -1445,7 +1450,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             return Object.fromEntries(identifiers.map((fieldName) => [fieldName, true]));
         }
 
-        const firstScalar = getScalarFields(model)[0];
+        const firstScalar = this.getVisibleScalarFields(model)[0];
         return firstScalar ? { [firstScalar.name]: true } : {};
     }
 
@@ -1478,7 +1483,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         if (this.needsDistinctRows(plan) && plan.countRequests.some((request) => request.distinct && !request.columns?.length)) {
-            for (const field of getScalarFields(model)) {
+            for (const field of this.getVisibleScalarFields(model)) {
                 fields.add(field.name);
             }
         }

@@ -28,6 +28,19 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function hasFieldAttribute(
+    field: Record<string, unknown>,
+    attributeName: string
+) {
+    if (!Array.isArray(field.attributes)) {
+        return false;
+    }
+
+    return field.attributes.some(
+        (attribute) => isPlainObject(attribute) && attribute.name === attributeName
+    );
+}
+
 function normalizeField(
     fieldName: string,
     field: FieldDefinition | Record<string, unknown>,
@@ -70,6 +83,14 @@ function normalizeField(
             ('isUnique' in generatedField && typeof generatedField.isUnique === 'boolean'
                 ? generatedField.isUnique
                 : uniqueFieldNames.has(fieldName)),
+        isReadOnly:
+            ('isReadOnly' in generatedField && typeof generatedField.isReadOnly === 'boolean'
+                ? generatedField.isReadOnly
+                : hasFieldAttribute(generatedField, '@computed')),
+        isComputed:
+            ('isComputed' in generatedField && typeof generatedField.isComputed === 'boolean'
+                ? generatedField.isComputed
+                : hasFieldAttribute(generatedField, '@computed')),
         foreignKeyFields:
             ('foreignKeyFields' in generatedField && Array.isArray(generatedField.foreignKeyFields)
                 ? (generatedField.foreignKeyFields as string[])
