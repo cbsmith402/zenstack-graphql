@@ -47,6 +47,7 @@ The generated schema uses Hasura-like defaults:
 - ZModel `procedure` and `mutation procedure` definitions are exposed as GraphQL query and mutation roots via `client.$procs`
 - `extensions.query` and `extensions.mutation` let you attach manual GraphQL root fields that receive the same request-scoped ZenStack client as generated resolvers
 - `*_by_pk` roots are emitted only for real primary keys
+- Relation aggregate `order_by` on parent collections is currently supported only for `count`, matching the documented ORM `orderBy: { relation: { _count: ... } }` shape
 
 ## Role-aware schemas
 

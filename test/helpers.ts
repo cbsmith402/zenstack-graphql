@@ -199,7 +199,12 @@ function applyDistinct<T extends Record<string, unknown>>(records: T[], distinct
     return result;
 }
 
-function sortRecords<T extends Record<string, unknown>>(records: T[], orderBy?: QueryArgs['orderBy']) {
+function sortRecords<T extends Record<string, unknown>>(
+    store: DataStore,
+    modelName: ModelName,
+    records: T[],
+    orderBy?: QueryArgs['orderBy']
+) {
     if (!orderBy) {
         return [...records];
     }
@@ -209,6 +214,18 @@ function sortRecords<T extends Record<string, unknown>>(records: T[], orderBy?: 
     sorted.sort((left, right) => {
         for (const clause of clauses) {
             for (const [field, direction] of Object.entries(clause)) {
+                if (isRecord(direction) && (direction._count === 'asc' || direction._count === 'desc')) {
+                    if (modelName === 'User' && field === 'posts') {
+                        const leftCount = getUserPosts(store, left as UserRecord).length;
+                        const rightCount = getUserPosts(store, right as UserRecord).length;
+                        const comparison = compareValues(leftCount, rightCount);
+                        if (comparison !== 0) {
+                            return direction._count === 'desc' ? -comparison : comparison;
+                        }
+                    }
+                    continue;
+                }
+
                 const ordering =
                     typeof direction === 'string'
                         ? { sort: direction, nulls: undefined }
@@ -356,6 +373,8 @@ function applySelect(
             const relationArgs = value as QueryArgs;
             const posts = applyDistinct(
                 sortRecords(
+                    store,
+                    'Post',
                     getUserPosts(store, record as UserRecord).filter((post) =>
                         recordMatches(store, 'Post', post, relationArgs.where)
                     ),
@@ -430,6 +449,8 @@ function createUserDelegate(store: DataStore) {
         async findMany(args: QueryArgs = {}) {
             return applyDistinct(
                 sortRecords(
+                    store,
+                    'User',
                     store.users.filter((record) => recordMatches(store, 'User', record, args.where)),
                     args.orderBy
                 ),
@@ -594,6 +615,8 @@ function createPostDelegate(store: DataStore) {
         async findMany(args: QueryArgs = {}) {
             return applyDistinct(
                 sortRecords(
+                    store,
+                    'Post',
                     store.posts.filter((record) => recordMatches(store, 'Post', record, args.where)),
                     args.orderBy
                 ),

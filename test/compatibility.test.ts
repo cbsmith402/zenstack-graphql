@@ -190,5 +190,53 @@ for (const fixture of fixtures) {
     });
 }
 
-test.todo('matches Hasura-style relation aggregate order_by semantics on parent collections');
+test('matches Hasura-style relation aggregate order_by semantics on parent collections', async () => {
+    const { client } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => client,
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query HasuraRelationAggregateOrder {
+                users(order_by: [{ posts_aggregate: { count: desc } }, { id: asc }]) {
+                    id
+                    name
+                    posts_aggregate {
+                        aggregate {
+                            count
+                        }
+                    }
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        users: [
+            {
+                id: 1,
+                name: 'Ada',
+                posts_aggregate: {
+                    aggregate: {
+                        count: 2,
+                    },
+                },
+            },
+            {
+                id: 2,
+                name: 'Ben',
+                posts_aggregate: {
+                    aggregate: {
+                        count: 1,
+                    },
+                },
+            },
+        ],
+    });
+});
+
 test.todo('matches richer Hasura relationship filter semantics beyond simple list->some lowering');

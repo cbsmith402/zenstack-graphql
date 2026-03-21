@@ -305,6 +305,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly comparisonInputs = new Map<string, GraphQLInputObjectType>();
     private readonly whereInputs = new Map<string, GraphQLInputObjectType>();
     private readonly orderInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly aggregateCountOrderInputs = new Map<string, GraphQLInputObjectType>();
     private readonly insertInputs = new Map<string, GraphQLInputObjectType>();
     private readonly relationInsertInputs = new Map<string, GraphQLInputObjectType>();
     private readonly relationUpdateInputs = new Map<string, GraphQLInputObjectType>();
@@ -1230,7 +1231,15 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 const fields: GraphQLInputFieldConfigMap = {};
                 for (const field of this.getVisibleFields(model)) {
                     if (field.kind === 'relation') {
-                        fields[field.name] = { type: this.getOrderByInput(this.getModel(field.type)) };
+                        if (field.isList) {
+                            fields[`${field.name}_aggregate`] = {
+                                type: this.getAggregateCountOrderByInput(model, field),
+                            };
+                        } else {
+                            fields[field.name] = {
+                                type: this.getOrderByInput(this.getModel(field.type)),
+                            };
+                        }
                     } else {
                         fields[field.name] = { type: ORDER_BY_ENUM };
                     }
@@ -1240,6 +1249,27 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         });
 
         this.orderInputs.set(model.name, input);
+        return input;
+    }
+
+    private getAggregateCountOrderByInput(
+        model: NormalizedModelDefinition,
+        relationField: NormalizedFieldDefinition
+    ) {
+        const key = `${model.name}:${relationField.name}`;
+        const existing = this.aggregateCountOrderInputs.get(key);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: `${this.naming.typeName(model.name)}_${relationField.name}_aggregate_order_by`,
+            fields: () => ({
+                count: { type: ORDER_BY_ENUM },
+            }),
+        });
+
+        this.aggregateCountOrderInputs.set(key, input);
         return input;
     }
 
@@ -2632,11 +2662,10 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         const orderBy: Record<string, unknown> = {};
         for (const [fieldName, value] of Object.entries(input)) {
             const field = model.fieldMap.get(fieldName);
-            if (!field) {
-                continue;
-            }
-
-            if (field.kind === 'relation') {
+            if (field?.kind === 'relation') {
+                if (field.isList) {
+                    continue;
+                }
                 const nested = this.toSingleOrderBy(this.getModel(field.type), value);
                 if (nested) {
                     orderBy[fieldName] = nested;
@@ -2644,9 +2673,30 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 continue;
             }
 
-            if (typeof value === 'string') {
-                orderBy[fieldName] = compileOrderDirection(value as OrderByDirection);
+            if (field) {
+                if (typeof value === 'string') {
+                    orderBy[fieldName] = compileOrderDirection(value as OrderByDirection);
+                }
+                continue;
             }
+
+            if (!fieldName.endsWith('_aggregate') || !isPlainObject(value)) {
+                continue;
+            }
+
+            const relationField = model.fieldMap.get(fieldName.slice(0, -'_aggregate'.length));
+            if (
+                !relationField ||
+                relationField.kind !== 'relation' ||
+                !relationField.isList ||
+                typeof value.count !== 'string'
+            ) {
+                continue;
+            }
+
+            orderBy[relationField.name] = {
+                _count: normalizeOrderDirection(value.count as OrderByDirection),
+            };
         }
 
         return Object.keys(orderBy).length > 0 ? orderBy : undefined;
