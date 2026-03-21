@@ -72,7 +72,16 @@ export interface ZenStackSchemaLike {
     models?:
         | ModelDefinition[]
         | Record<string, ModelDefinition>
-        | Record<string, { fields: ModelDefinition['fields']; primaryKey?: string[]; uniqueConstraints?: UniqueConstraintDefinition[] }>;
+        | Record<string, { fields: ModelDefinition['fields']; primaryKey?: string[]; uniqueConstraints?: UniqueConstraintDefinition[] }>
+        | Record<
+              string,
+              {
+                  name?: string;
+                  fields: Record<string, Record<string, unknown>>;
+                  idFields?: readonly string[];
+                  uniqueFields?: Record<string, unknown>;
+              }
+          >;
     enums?: EnumDefinition[] | Record<string, EnumDefinition>;
     modelMeta?: ZenStackSchemaLike['models'];
     enumMeta?: ZenStackSchemaLike['enums'];

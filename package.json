@@ -17,6 +17,9 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "demo:build": "npm run build --prefix examples/nextjs-demo",
+    "demo:dev": "npm run dev --prefix examples/nextjs-demo",
+    "demo:typecheck": "npm run typecheck --prefix examples/nextjs-demo",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/**/*.test.ts"
   },
@@ -26,11 +29,12 @@
     "zenstack"
   ],
   "license": "MIT",
-  "dependencies": {
+  "peerDependencies": {
     "graphql": "^16.11.0"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
+    "graphql": "^16.11.0",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   }

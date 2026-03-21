@@ -10,28 +10,91 @@ import type {
     ZenStackSchemaLike,
 } from './types.js';
 
-function toArray<T>(value: T[] | Record<string, T> | undefined): T[] {
-    if (!value) {
-        return [];
-    }
-    return Array.isArray(value) ? value : Object.values(value);
+const BUILTIN_SCALARS = new Set([
+    'String',
+    'Boolean',
+    'Int',
+    'Float',
+    'BigInt',
+    'Decimal',
+    'DateTime',
+    'Bytes',
+    'Json',
+    'ID',
+]);
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+    return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function normalizeField(fieldName: string, field: FieldDefinition): NormalizedFieldDefinition {
+function normalizeField(
+    fieldName: string,
+    field: FieldDefinition | Record<string, unknown>,
+    enumNames: Set<string>,
+    uniqueFieldNames: Set<string>
+): NormalizedFieldDefinition {
+    const generatedField = field as Record<string, unknown>;
+    const kind: NormalizedFieldDefinition['kind'] =
+        'kind' in generatedField && typeof generatedField.kind === 'string'
+            ? (generatedField.kind as NormalizedFieldDefinition['kind'])
+            : generatedField.relation
+              ? 'relation'
+              : enumNames.has(String(generatedField.type))
+                ? 'enum'
+                : 'scalar';
+
+    const relation = isPlainObject(generatedField.relation) ? generatedField.relation : undefined;
+
     return {
-        ...field,
-        name: field.name ?? fieldName,
-        type: field.type,
+        ...(generatedField as unknown as Partial<NormalizedFieldDefinition>),
+        name:
+            ('name' in generatedField && typeof generatedField.name === 'string'
+                ? generatedField.name
+                : fieldName),
+        kind,
+        type: String(generatedField.type),
+        isList:
+            ('isList' in generatedField && typeof generatedField.isList === 'boolean'
+                ? generatedField.isList
+                : Boolean(generatedField.array)),
+        isNullable:
+            ('isNullable' in generatedField && typeof generatedField.isNullable === 'boolean'
+                ? generatedField.isNullable
+                : Boolean(generatedField.optional)),
+        isId:
+            ('isId' in generatedField && typeof generatedField.isId === 'boolean'
+                ? generatedField.isId
+                : Boolean(generatedField.id)),
+        isUnique:
+            ('isUnique' in generatedField && typeof generatedField.isUnique === 'boolean'
+                ? generatedField.isUnique
+                : uniqueFieldNames.has(fieldName)),
+        foreignKeyFields:
+            ('foreignKeyFields' in generatedField && Array.isArray(generatedField.foreignKeyFields)
+                ? (generatedField.foreignKeyFields as string[])
+                : Array.isArray(relation?.fields)
+                  ? (relation.fields as string[])
+                  : undefined),
+        referenceFields:
+            ('referenceFields' in generatedField && Array.isArray(generatedField.referenceFields)
+                ? (generatedField.referenceFields as string[])
+                : Array.isArray(relation?.references)
+                  ? (relation.references as string[])
+                  : undefined),
     };
 }
 
-function normalizeFields(fields: ModelDefinition['fields']): NormalizedFieldDefinition[] {
+function normalizeFields(
+    fields: ModelDefinition['fields'],
+    enumNames: Set<string>,
+    uniqueFieldNames: Set<string>
+): NormalizedFieldDefinition[] {
     if (Array.isArray(fields)) {
-        return fields.map((field) => normalizeField(field.name, field));
+        return fields.map((field) => normalizeField(field.name, field, enumNames, uniqueFieldNames));
     }
 
     return Object.entries(fields).map(([fieldName, field]) =>
-        normalizeField(fieldName, field)
+        normalizeField(fieldName, field, enumNames, uniqueFieldNames)
     );
 }
 
@@ -57,11 +120,24 @@ function normalizeUniqueConstraints(
     });
 }
 
-function normalizeModel(modelName: string, model: ModelDefinition): NormalizedModelDefinition {
-    const fields = normalizeFields(model.fields);
-    const uniqueConstraints = normalizeUniqueConstraints(fields, model.uniqueConstraints);
+function normalizeModel(
+    modelName: string,
+    model: ModelDefinition & Record<string, unknown>,
+    enumNames: Set<string>
+): NormalizedModelDefinition {
+    const generatedUniqueFields = isPlainObject(model.uniqueFields) ? model.uniqueFields : undefined;
+    const generatedUniqueConstraints = generatedUniqueFields
+        ? Object.keys(generatedUniqueFields).map((fieldName) => ({ fields: [fieldName] }))
+        : undefined;
+    const uniqueFieldNames = new Set(Object.keys(generatedUniqueFields ?? {}));
+    const fields = normalizeFields(model.fields, enumNames, uniqueFieldNames);
+    const uniqueConstraints = normalizeUniqueConstraints(
+        fields,
+        model.uniqueConstraints ?? generatedUniqueConstraints
+    );
     const primaryKey =
         model.primaryKey ??
+        (Array.isArray(model.idFields) ? (model.idFields as string[]) : undefined) ??
         fields
             .filter((field) => field.isId)
             .map((field) => field.name);
@@ -96,15 +172,22 @@ export function normalizeSchema(schema: ZenStackSchemaLike | ModelDefinition[]):
     const modelsRaw = schemaInput.models ?? schemaInput.modelMeta;
     const enumsRaw = schemaInput.enums ?? schemaInput.enumMeta;
 
-    const models = Array.isArray(modelsRaw)
-        ? modelsRaw.map((model) => normalizeModel(model.name, model as ModelDefinition))
-        : Object.entries(modelsRaw ?? {}).map(([modelName, model]) =>
-              normalizeModel(modelName, { ...(model as ModelDefinition), name: modelName })
-          );
     const enums = Array.isArray(enumsRaw)
         ? enumsRaw.map((entry) => normalizeEnum(entry.name, entry as EnumDefinition))
         : Object.entries(enumsRaw ?? {}).map(([enumName, entry]) =>
               normalizeEnum(enumName, { ...(entry as EnumDefinition), name: enumName })
+          );
+    const enumNames = new Set(enums.map((entry) => entry.name));
+    const models = Array.isArray(modelsRaw)
+        ? modelsRaw.map((model) =>
+              normalizeModel(model.name, model as ModelDefinition & Record<string, unknown>, enumNames)
+          )
+        : Object.entries(modelsRaw ?? {}).map(([modelName, model]) =>
+              normalizeModel(
+                  modelName,
+                  { ...(model as ModelDefinition), name: modelName } as ModelDefinition & Record<string, unknown>,
+                  enumNames
+              )
           );
 
     return {

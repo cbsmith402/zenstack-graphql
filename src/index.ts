@@ -1,3 +1,4 @@
+export { graphql, printSchema } from 'graphql';
 export { createZenStackGraphQLSchema } from './schema.js';
 export { normalizeSchema } from './metadata.js';
 export { normalizeError } from './errors.js';
