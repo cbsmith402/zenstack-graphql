@@ -52,6 +52,9 @@ import type {
     ResolverInvocation,
     RootFieldConfig,
     ScalarType,
+    SchemaCrudOperation,
+    SchemaFilterKind,
+    SchemaSlicingConfig,
     ZenStackClientLike,
 } from './types.js';
 
@@ -264,6 +267,17 @@ type AggregateCountRequest = {
     distinct?: boolean;
 };
 
+type RootCrudOperation =
+    | 'queryMany'
+    | 'queryByPk'
+    | 'aggregate'
+    | 'insertMany'
+    | 'insertOne'
+    | 'updateMany'
+    | 'updateByPk'
+    | 'deleteMany'
+    | 'deleteByPk';
+
 type AggregatePlan = {
     wantsAggregate: boolean;
     wantsNodes: boolean;
@@ -281,6 +295,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly normalizedSchema: NormalizedSchema;
     private readonly features: Required<FeatureFlags>;
     private readonly naming: NamingStrategy;
+    private readonly slicing: SchemaSlicingConfig | undefined;
     private readonly providerCapabilities: ProviderCapabilities;
     private readonly objectTypes = new Map<string, GraphQLObjectType>();
     private readonly typeDefObjectTypes = new Map<string, GraphQLObjectType>();
@@ -310,6 +325,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         this.normalizedSchema = normalizeSchema(options.schema);
         this.features = { ...DEFAULT_FEATURES, ...options.features };
         this.naming = resolveNamingStrategy(options.naming);
+        this.slicing = options.slicing;
         this.providerCapabilities = getProviderCapabilities(this.normalizedSchema);
     }
 
@@ -329,24 +345,255 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return this.providerCapabilities.supportsScalarListFilters;
     }
 
+    private getConfiguredNames(names: string[] | undefined) {
+        return new Set((names ?? []).filter((name): name is string => typeof name === 'string'));
+    }
+
+    private getModelConfigKeys(model: NormalizedModelDefinition) {
+        const keys = new Set<string>([
+            model.name,
+            lowerCamelCase(model.name),
+        ]);
+        if (model.dbName) {
+            keys.add(model.dbName);
+            keys.add(lowerCamelCase(model.dbName));
+        }
+        return Array.from(keys);
+    }
+
+    private isModelIncluded(model: NormalizedModelDefinition) {
+        const candidates = this.getModelConfigKeys(model);
+        const included = this.getConfiguredNames(this.slicing?.includedModels);
+        const excluded = this.getConfiguredNames(this.slicing?.excludedModels);
+
+        if (candidates.some((candidate) => excluded.has(candidate))) {
+            return false;
+        }
+        if (included.size > 0) {
+            return candidates.some((candidate) => included.has(candidate));
+        }
+        return true;
+    }
+
+    private getModelSlice(model: NormalizedModelDefinition) {
+        const allConfig = this.slicing?.models?.$all;
+        const specific = this.getModelConfigKeys(model)
+            .map((key) => this.slicing?.models?.[key])
+            .find((value) => value !== undefined);
+        const allFields = allConfig?.fields?.$all;
+        const sharedFields = allConfig?.fields ?? {};
+        const modelFieldAllConfig = specific?.fields?.$all;
+        const modelFields = specific?.fields ?? {};
+
+        return {
+            includedOperations: [
+                ...(allConfig?.includedOperations ?? []),
+                ...(specific?.includedOperations ?? []),
+            ],
+            excludedOperations: [
+                ...(allConfig?.excludedOperations ?? []),
+                ...(specific?.excludedOperations ?? []),
+            ],
+            includedFields: [
+                ...(allConfig?.includedFields ?? []),
+                ...(specific?.includedFields ?? []),
+            ],
+            excludedFields: [
+                ...(allConfig?.excludedFields ?? []),
+                ...(specific?.excludedFields ?? []),
+            ],
+            fields: modelFields,
+            allFieldConfig: allFields,
+            allModelFields: sharedFields,
+            modelFieldAllConfig,
+        };
+    }
+
+    private normalizeOperationName(operation: SchemaCrudOperation): RootCrudOperation | undefined {
+        switch (operation) {
+            case 'findMany':
+            case 'queryMany':
+                return 'queryMany';
+            case 'findUnique':
+            case 'queryByPk':
+                return 'queryByPk';
+            case 'aggregate':
+                return 'aggregate';
+            case 'createMany':
+            case 'insertMany':
+                return 'insertMany';
+            case 'create':
+            case 'insertOne':
+                return 'insertOne';
+            case 'updateMany':
+                return 'updateMany';
+            case 'update':
+            case 'updateByPk':
+                return 'updateByPk';
+            case 'deleteMany':
+                return 'deleteMany';
+            case 'delete':
+            case 'deleteByPk':
+                return 'deleteByPk';
+            default:
+                return undefined;
+        }
+    }
+
+    private isOperationEnabled(model: NormalizedModelDefinition, operation: RootCrudOperation) {
+        if (!this.isModelIncluded(model)) {
+            return false;
+        }
+
+        const slice = this.getModelSlice(model);
+        const excluded = new Set(
+            slice.excludedOperations
+                .map((entry) => this.normalizeOperationName(entry))
+                .filter((entry): entry is RootCrudOperation => Boolean(entry))
+        );
+        if (excluded.has(operation)) {
+            return false;
+        }
+
+        const included = slice.includedOperations
+            .map((entry) => this.normalizeOperationName(entry))
+            .filter((entry): entry is RootCrudOperation => Boolean(entry));
+        if (included.length > 0) {
+            return included.includes(operation);
+        }
+
+        return true;
+    }
+
+    private isProcedureIncluded(procedure: NormalizedProcedureDefinition) {
+        const included = this.getConfiguredNames(this.slicing?.includedProcedures);
+        const excluded = this.getConfiguredNames(this.slicing?.excludedProcedures);
+
+        if (excluded.has(procedure.name)) {
+            return false;
+        }
+        if (included.size > 0 && !included.has(procedure.name)) {
+            return false;
+        }
+        if (procedure.returnKind === 'model') {
+            const model = this.normalizedSchema.modelMap.get(procedure.returnType);
+            if (model && !this.isModelIncluded(model)) {
+                return false;
+            }
+        }
+
+        return procedure.params.every((param) => {
+            if (param.kind !== 'model') {
+                return true;
+            }
+            const model = this.normalizedSchema.modelMap.get(param.type);
+            return !model || this.isModelIncluded(model);
+        });
+    }
+
+    private isFieldIncluded(model: NormalizedModelDefinition, field: NormalizedFieldDefinition) {
+        const slice = this.getModelSlice(model);
+        const excludedFields = new Set(
+            slice.excludedFields.filter((entry): entry is string => typeof entry === 'string')
+        );
+        if (excludedFields.has(field.name)) {
+            return false;
+        }
+
+        const includedFields = slice.includedFields.filter(
+            (entry): entry is string => typeof entry === 'string'
+        );
+        if (includedFields.length > 0 && !includedFields.includes(field.name)) {
+            return false;
+        }
+
+        if (field.kind === 'relation') {
+            const relatedModel = this.normalizedSchema.modelMap.get(field.type);
+            if (relatedModel && !this.isModelIncluded(relatedModel)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private getFieldFilterKinds(
+        model: NormalizedModelDefinition,
+        field: NormalizedFieldDefinition
+    ) {
+        const defaults = this.getDefaultFieldFilterKinds(field);
+        const slice = this.getModelSlice(model);
+        const specific =
+            slice.fields[field.name] ??
+            slice.modelFieldAllConfig ??
+            slice.allModelFields[field.name] ??
+            slice.allFieldConfig;
+
+        const included = specific?.includedFilterKinds ?? [];
+        const excluded = new Set(specific?.excludedFilterKinds ?? []);
+        const allowed =
+            included.length > 0
+                ? defaults.filter((kind) => included.includes(kind))
+                : defaults;
+        return allowed.filter((kind) => !excluded.has(kind));
+    }
+
+    private getDefaultFieldFilterKinds(field: NormalizedFieldDefinition) {
+        const defaults: SchemaFilterKind[] = ['Equality'];
+
+        if (field.kind === 'relation') {
+            defaults.push('Relation');
+        }
+        if (!field.isList && field.kind === 'scalar' && isComparableScalar(field.type)) {
+            defaults.push('Range');
+        }
+        if (!field.isList && field.kind === 'scalar' && field.type === 'String') {
+            defaults.push('Like');
+        }
+        if (field.kind === 'scalar' && field.type === 'Json' && this.supportsJsonFilters()) {
+            defaults.push('Json');
+        }
+        if (field.isList && this.supportsScalarListFilters()) {
+            defaults.push('List');
+        }
+
+        return defaults;
+    }
+
+    private getFieldFilterKindsKey(
+        model: NormalizedModelDefinition,
+        field: NormalizedFieldDefinition
+    ) {
+        const allowed = this.getFieldFilterKinds(model, field);
+        const defaults = this.getDefaultFieldFilterKinds(field);
+        const hasDefaultKinds =
+            allowed.length === defaults.length &&
+            allowed.every((kind, index) => defaults[index] === kind);
+        return hasDefaultKinds
+            ? `${field.type}${field.isList ? '_list' : ''}_comparison_exp`
+            : `${this.naming.typeName(model.name)}_${field.name}_comparison_exp`;
+    }
+
     createSchema() {
         const queryFields: GraphQLFieldConfigMap<unknown, TContext> = {};
         const mutationFields: GraphQLFieldConfigMap<unknown, TContext> = {};
 
         for (const model of this.normalizedSchema.models) {
-            queryFields[this.naming.queryMany(model)] = {
-                type: new GraphQLNonNull(new GraphQLList(this.getModelObjectType(model))),
-                description: `List ${model.name} records`,
-                args: this.getCollectionArgs(model),
-                resolve: this.createResolver('query', model, async ({ client, args, info }) => {
-                    const delegate = this.getRequiredDelegate(client, model);
-                    const queryArgs = this.compileFindManyArgs(model, args, info);
-                    this.assertMethod(delegate, 'findMany', model);
-                    return delegate.findMany!(queryArgs);
-                }),
-            };
+            if (this.isOperationEnabled(model, 'queryMany')) {
+                queryFields[this.naming.queryMany(model)] = {
+                    type: new GraphQLNonNull(new GraphQLList(this.getModelObjectType(model))),
+                    description: `List ${model.name} records`,
+                    args: this.getCollectionArgs(model),
+                    resolve: this.createResolver('query', model, async ({ client, args, info }) => {
+                        const delegate = this.getRequiredDelegate(client, model);
+                        const queryArgs = this.compileFindManyArgs(model, args, info);
+                        this.assertMethod(delegate, 'findMany', model);
+                        return delegate.findMany!(queryArgs);
+                    }),
+                };
+            }
 
-            if (getPrimaryKeyFields(model).length > 0) {
+            if (getPrimaryKeyFields(model).length > 0 && this.isOperationEnabled(model, 'queryByPk')) {
                 queryFields[this.naming.queryByPk(model)] = {
                     type: this.getModelObjectType(model),
                     description: `Fetch ${model.name} by primary key`,
@@ -370,7 +617,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 };
             }
 
-            if (this.features.aggregates) {
+            if (this.features.aggregates && this.isOperationEnabled(model, 'aggregate')) {
                 queryFields[this.naming.queryAggregate(model)] = {
                     type: new GraphQLNonNull(this.getAggregateType(model)),
                     description: `Aggregate ${model.name} records`,
@@ -383,100 +630,124 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 };
             }
 
-            mutationFields[this.naming.insertMany(model)] = {
-                type: new GraphQLNonNull(this.getMutationResponseType(model)),
-                args: {
-                    objects: {
-                        type: new GraphQLNonNull(
-                            new GraphQLList(new GraphQLNonNull(this.getInsertInput(model)))
-                        ),
-                    },
-                    ...(this.features.conflictClauses && this.getConflictConstraints(model).length > 0
-                        ? {
-                              on_conflict: {
-                                  type: this.getOnConflictInput(model),
-                              },
-                          }
-                        : {}),
-                },
-                resolve: this.createResolver(
-                    'insertMany',
-                    model,
-                    async ({ client, args, info }) => this.resolveInsertMany(model, client, args, info)
-                ),
-            };
-
-            mutationFields[this.naming.insertOne(model)] = {
-                type: this.getModelObjectType(model),
-                args: {
-                    object: { type: new GraphQLNonNull(this.getInsertInput(model)) },
-                    ...(this.features.conflictClauses && this.getConflictConstraints(model).length > 0
-                        ? {
-                              on_conflict: {
-                                  type: this.getOnConflictInput(model),
-                              },
-                          }
-                        : {}),
-                },
-                resolve: this.createResolver('insertOne', model, async ({ client, args, info }) => {
-                    return this.resolveInsertOne(model, client, args, info);
-                }),
-            };
-
-            mutationFields[this.naming.updateMany(model)] = {
-                type: new GraphQLNonNull(this.getMutationResponseType(model)),
-                args: {
-                    where: { type: new GraphQLNonNull(this.getWhereInput(model)) },
-                    _set: { type: this.getSetInput(model) },
-                    _inc: { type: this.getIncInput(model) },
-                },
-                resolve: this.createResolver(
-                    'updateMany',
-                    model,
-                    async ({ client, args, info }) => this.resolveUpdateMany(model, client, args, info)
-                ),
-            };
-
-            if (getPrimaryKeyFields(model).length > 0) {
-                mutationFields[this.naming.updateByPk(model)] = {
-                    type: this.getModelObjectType(model),
+            if (this.isOperationEnabled(model, 'insertMany')) {
+                mutationFields[this.naming.insertMany(model)] = {
+                    type: new GraphQLNonNull(this.getMutationResponseType(model)),
                     args: {
-                        ...this.getPrimaryKeyArgs(model),
-                        _set: { type: this.getSetInput(model) },
-                        _inc: { type: this.getIncInput(model) },
+                        objects: {
+                            type: new GraphQLNonNull(
+                                new GraphQLList(new GraphQLNonNull(this.getInsertInput(model)))
+                            ),
+                        },
+                        ...(this.features.conflictClauses && this.getConflictConstraints(model).length > 0
+                            ? {
+                                  on_conflict: {
+                                      type: this.getOnConflictInput(model),
+                                  },
+                              }
+                            : {}),
                     },
                     resolve: this.createResolver(
-                        'updateByPk',
+                        'insertMany',
                         model,
-                        async ({ client, args, info }) => this.resolveUpdateByPk(model, client, args, info)
-                    ),
-                };
-
-                mutationFields[this.naming.deleteByPk(model)] = {
-                    type: this.getModelObjectType(model),
-                    args: this.getPrimaryKeyArgs(model),
-                    resolve: this.createResolver(
-                        'deleteByPk',
-                        model,
-                        async ({ client, args, info }) => this.resolveDeleteByPk(model, client, args, info)
+                        async ({ client, args, info }) =>
+                            this.resolveInsertMany(model, client, args, info)
                     ),
                 };
             }
 
-            mutationFields[this.naming.deleteMany(model)] = {
-                type: new GraphQLNonNull(this.getMutationResponseType(model)),
-                args: {
-                    where: { type: new GraphQLNonNull(this.getWhereInput(model)) },
-                },
-                resolve: this.createResolver(
-                    'deleteMany',
-                    model,
-                    async ({ client, args, info }) => this.resolveDeleteMany(model, client, args, info)
-                ),
-            };
+            if (this.isOperationEnabled(model, 'insertOne')) {
+                mutationFields[this.naming.insertOne(model)] = {
+                    type: this.getModelObjectType(model),
+                    args: {
+                        object: { type: new GraphQLNonNull(this.getInsertInput(model)) },
+                        ...(this.features.conflictClauses && this.getConflictConstraints(model).length > 0
+                            ? {
+                                  on_conflict: {
+                                      type: this.getOnConflictInput(model),
+                                  },
+                              }
+                            : {}),
+                    },
+                    resolve: this.createResolver(
+                        'insertOne',
+                        model,
+                        async ({ client, args, info }) => {
+                            return this.resolveInsertOne(model, client, args, info);
+                        }
+                    ),
+                };
+            }
+
+            if (this.isOperationEnabled(model, 'updateMany')) {
+                mutationFields[this.naming.updateMany(model)] = {
+                    type: new GraphQLNonNull(this.getMutationResponseType(model)),
+                    args: {
+                        where: { type: new GraphQLNonNull(this.getWhereInput(model)) },
+                        _set: { type: this.getSetInput(model) },
+                        _inc: { type: this.getIncInput(model) },
+                    },
+                    resolve: this.createResolver(
+                        'updateMany',
+                        model,
+                        async ({ client, args, info }) =>
+                            this.resolveUpdateMany(model, client, args, info)
+                    ),
+                };
+            }
+
+            if (getPrimaryKeyFields(model).length > 0) {
+                if (this.isOperationEnabled(model, 'updateByPk')) {
+                    mutationFields[this.naming.updateByPk(model)] = {
+                        type: this.getModelObjectType(model),
+                        args: {
+                            ...this.getPrimaryKeyArgs(model),
+                            _set: { type: this.getSetInput(model) },
+                            _inc: { type: this.getIncInput(model) },
+                        },
+                        resolve: this.createResolver(
+                            'updateByPk',
+                            model,
+                            async ({ client, args, info }) =>
+                                this.resolveUpdateByPk(model, client, args, info)
+                        ),
+                    };
+                }
+
+                if (this.isOperationEnabled(model, 'deleteByPk')) {
+                    mutationFields[this.naming.deleteByPk(model)] = {
+                        type: this.getModelObjectType(model),
+                        args: this.getPrimaryKeyArgs(model),
+                        resolve: this.createResolver(
+                            'deleteByPk',
+                            model,
+                            async ({ client, args, info }) =>
+                                this.resolveDeleteByPk(model, client, args, info)
+                        ),
+                    };
+                }
+            }
+
+            if (this.isOperationEnabled(model, 'deleteMany')) {
+                mutationFields[this.naming.deleteMany(model)] = {
+                    type: new GraphQLNonNull(this.getMutationResponseType(model)),
+                    args: {
+                        where: { type: new GraphQLNonNull(this.getWhereInput(model)) },
+                    },
+                    resolve: this.createResolver(
+                        'deleteMany',
+                        model,
+                        async ({ client, args, info }) =>
+                            this.resolveDeleteMany(model, client, args, info)
+                    ),
+                };
+            }
         }
 
         for (const procedure of this.normalizedSchema.procedures) {
+            if (!this.isProcedureIncluded(procedure)) {
+                continue;
+            }
             const target = procedure.mutation ? mutationFields : queryFields;
             if (target[procedure.name]) {
                 throw new Error(
@@ -489,15 +760,22 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         this.assignRootFields(queryFields, this.options.extensions?.query, 'query');
         this.assignRootFields(mutationFields, this.options.extensions?.mutation, 'mutation');
 
+        if (Object.keys(queryFields).length === 0) {
+            throw new Error('Schema pruning removed all query root fields');
+        }
+
         const schema = new GraphQLSchema({
             query: new GraphQLObjectType({
                 name: 'Query',
                 fields: () => queryFields,
             }),
-            mutation: new GraphQLObjectType({
-                name: 'Mutation',
-                fields: () => mutationFields,
-            }),
+            mutation:
+                Object.keys(mutationFields).length > 0
+                    ? new GraphQLObjectType({
+                          name: 'Mutation',
+                          fields: () => mutationFields,
+                      })
+                    : undefined,
         });
 
         registerExecutionMetadata(schema, {
@@ -607,6 +885,9 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 return false;
             }
             if (!this.features.computedFields && field.isComputed) {
+                return false;
+            }
+            if (!this.isFieldIncluded(model, field)) {
                 return false;
             }
             return true;
@@ -781,15 +1062,20 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         ) as GraphQLInputType;
     }
 
-    private getComparatorInput(field: NormalizedFieldDefinition) {
-        const key = `${field.kind}:${field.type}:${field.isList ? 'list' : 'single'}`;
+    private getComparatorInput(
+        model: NormalizedModelDefinition,
+        field: NormalizedFieldDefinition
+    ) {
+        const filterKinds = this.getFieldFilterKinds(model, field);
+        const typeName = this.getFieldFilterKindsKey(model, field);
+        const key = `${typeName}:${field.kind}:${field.type}:${field.isList ? 'list' : 'single'}:${filterKinds.join(',')}`;
         const existing = this.comparisonInputs.get(key);
         if (existing) {
             return existing;
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${field.type}${field.isList ? '_list' : ''}_comparison_exp`,
+            name: typeName,
             fields: () => {
                 const scalarType =
                     field.kind === 'enum'
@@ -800,24 +1086,46 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                         ? new GraphQLList(new GraphQLNonNull(scalarType))
                         : scalarType;
                 const fields: GraphQLInputFieldConfigMap = {
-                    _eq: { type: baseType },
-                    _neq: { type: baseType },
-                    _in: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
-                    _nin: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
-                    _is_null: { type: getScalarType('Boolean', this.options.scalars) },
+                    ...(filterKinds.includes('Equality')
+                        ? {
+                              _eq: { type: baseType },
+                              _neq: { type: baseType },
+                              _in: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
+                              _nin: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
+                              _is_null: { type: getScalarType('Boolean', this.options.scalars) },
+                              ...(field.kind === 'scalar' && field.type === 'Json'
+                                  ? {
+                                        equals: {
+                                            type: getScalarType('Json', this.options.scalars),
+                                        },
+                                        not: {
+                                            type: getScalarType('Json', this.options.scalars),
+                                        },
+                                    }
+                                  : {}),
+                          }
+                        : {}),
                 };
 
-                if (!field.isList && field.kind === 'scalar' && isComparableScalar(field.type)) {
+                if (
+                    filterKinds.includes('Range') &&
+                    !field.isList &&
+                    field.kind === 'scalar' &&
+                    isComparableScalar(field.type)
+                ) {
                     fields._gt = { type: baseType };
                     fields._gte = { type: baseType };
                     fields._lt = { type: baseType };
                     fields._lte = { type: baseType };
                 }
 
-                if (field.kind === 'scalar' && field.type === 'Json' && this.supportsJsonFilters()) {
+                if (
+                    filterKinds.includes('Json') &&
+                    field.kind === 'scalar' &&
+                    field.type === 'Json' &&
+                    this.supportsJsonFilters()
+                ) {
                     fields.path = { type: GraphQLString };
-                    fields.equals = { type: getScalarType('Json', this.options.scalars) };
-                    fields.not = { type: getScalarType('Json', this.options.scalars) };
                     fields.string_contains = { type: GraphQLString };
                     fields.string_starts_with = { type: GraphQLString };
                     fields.string_ends_with = { type: GraphQLString };
@@ -829,7 +1137,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     }
                 }
 
-                if (field.isList && this.supportsScalarListFilters()) {
+                if (filterKinds.includes('List') && field.isList && this.supportsScalarListFilters()) {
                     fields.has = { type: scalarType };
                     fields.hasEvery = {
                         type: new GraphQLList(new GraphQLNonNull(scalarType)),
@@ -840,7 +1148,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     fields.isEmpty = { type: getScalarType('Boolean', this.options.scalars) };
                 }
 
-                if (!field.isList && field.kind === 'scalar' && field.type === 'String') {
+                if (
+                    filterKinds.includes('Like') &&
+                    !field.isList &&
+                    field.kind === 'scalar' &&
+                    field.type === 'String'
+                ) {
                     fields._contains = { type: GraphQLString };
                     fields._ncontains = { type: GraphQLString };
                     fields._icontains = { type: GraphQLString };
@@ -884,9 +1197,16 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
                 for (const field of this.getVisibleFields(model)) {
                     if (field.kind === 'relation') {
+                        if (!this.getFieldFilterKinds(model, field).includes('Relation')) {
+                            continue;
+                        }
                         fields[field.name] = { type: this.getWhereInput(this.getModel(field.type)) };
                     } else {
-                        fields[field.name] = { type: this.getComparatorInput(field) };
+                        const filterKinds = this.getFieldFilterKinds(model, field);
+                        if (filterKinds.length === 0) {
+                            continue;
+                        }
+                        fields[field.name] = { type: this.getComparatorInput(model, field) };
                     }
                 }
 
@@ -1076,13 +1396,17 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         model: NormalizedModelDefinition,
         relationField: NormalizedFieldDefinition
     ) {
+        const relatedModel = this.getModel(relationField.type);
+        if (!this.isOperationEnabled(relatedModel, 'insertOne')) {
+            return undefined;
+        }
+
         const key = `${model.name}:${relationField.name}`;
         const existing = this.relationInsertInputs.get(key);
         if (existing) {
             return existing;
         }
 
-        const relatedModel = this.getModel(relationField.type);
         const input = new GraphQLInputObjectType({
             name: `${this.naming.typeName(model.name)}_${relationField.name}_rel_insert_input`,
             fields: () => ({
@@ -1141,31 +1465,44 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         model: NormalizedModelDefinition,
         relationField: NormalizedFieldDefinition
     ) {
+        const relatedModel = this.getModel(relationField.type);
+        const supportsCreate = this.isOperationEnabled(relatedModel, 'insertOne');
+        const supportsUpdateMany = relationField.isList
+            ? this.isOperationEnabled(relatedModel, 'updateMany')
+            : false;
+        const supportsUpdateOne = !relationField.isList
+            ? this.isOperationEnabled(relatedModel, 'updateByPk')
+            : false;
+        if (!supportsCreate && !supportsUpdateMany && !supportsUpdateOne) {
+            return undefined;
+        }
+
         const key = `${model.name}:${relationField.name}`;
         const existing = this.relationUpdateInputs.get(key);
         if (existing) {
             return existing;
         }
 
-        const relatedModel = this.getModel(relationField.type);
         const input = new GraphQLInputObjectType({
             name: `${this.naming.typeName(model.name)}_${relationField.name}_rel_update_input`,
             fields: () => {
-                const fields: GraphQLInputFieldConfigMap = {
-                    create: {
+                const fields: GraphQLInputFieldConfigMap = {};
+
+                if (supportsCreate) {
+                    fields.create = {
                         type: relationField.isList
                             ? new GraphQLList(new GraphQLNonNull(this.getInsertInput(relatedModel)))
                             : this.getInsertInput(relatedModel),
-                    },
-                };
+                    };
+                }
 
-                if (relationField.isList) {
+                if (relationField.isList && supportsUpdateMany) {
                     fields.update_many = {
                         type: new GraphQLList(
                             new GraphQLNonNull(this.getRelationUpdateManyInput(relatedModel))
                         ),
                     };
-                } else {
+                } else if (!relationField.isList && supportsUpdateOne) {
                     fields.update = {
                         type: this.getNestedPatchInput(relatedModel),
                     };
@@ -1186,8 +1523,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 continue;
             }
 
+            const relationInput = this.getRelationInsertInput(model, field);
+            if (!relationInput) {
+                continue;
+            }
             fields[field.name] = {
-                type: this.getRelationInsertInput(model, field),
+                type: relationInput,
                 description: field.description,
             };
         }
@@ -1227,8 +1568,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 continue;
             }
 
+            const relationInput = this.getRelationUpdateInput(model, field);
+            if (!relationInput) {
+                continue;
+            }
             fields[field.name] = {
-                type: this.getRelationUpdateInput(model, field),
+                type: relationInput,
                 description: field.description,
             };
         }
@@ -1287,7 +1632,11 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                         }
                         config.resolve = this.createRelationResolver(model, field);
 
-                        if (field.isList && this.features.aggregates) {
+                        if (
+                            field.isList &&
+                            this.features.aggregates &&
+                            this.isOperationEnabled(relatedModel, 'aggregate')
+                        ) {
                             fields[`${field.name}_aggregate`] = {
                                 type: new GraphQLNonNull(this.getAggregateType(relatedModel)),
                                 args: this.getCollectionArgs(relatedModel),
@@ -1318,6 +1667,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             fields: () => {
                 const fields: GraphQLFieldConfigMap<unknown, TContext> = {};
                 for (const field of typeDef.fields) {
+                    if (field.kind === 'relation') {
+                        const relatedModel = this.normalizedSchema.modelMap.get(field.type);
+                        if (relatedModel && !this.isModelIncluded(relatedModel)) {
+                            continue;
+                        }
+                    }
                     fields[field.name] = {
                         type: this.getFieldOutputType(field),
                         description: field.description,
@@ -1343,6 +1698,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             fields: () => {
                 const fields: GraphQLInputFieldConfigMap = {};
                 for (const field of typeDef.fields) {
+                    if (field.kind === 'relation') {
+                        const relatedModel = this.normalizedSchema.modelMap.get(field.type);
+                        if (relatedModel && !this.isModelIncluded(relatedModel)) {
+                            continue;
+                        }
+                    }
                     fields[field.name] = {
                         type: this.getFieldInputType(field),
                         description: field.description,

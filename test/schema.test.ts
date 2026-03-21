@@ -311,6 +311,153 @@ test('allows manual root field extensions for custom resolvers', async () => {
     });
 });
 
+test('prunes models, fields, operations, and procedures with slicing config', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            ...schema,
+            procedures: {
+                getUserSummary: {
+                    returnType: 'User',
+                },
+                getPostSummary: {
+                    returnType: 'Post',
+                },
+            },
+        },
+        slicing: {
+            excludedModels: ['Post'],
+            excludedProcedures: ['getPostSummary'],
+            models: {
+                user: {
+                    excludedOperations: ['deleteMany', 'deleteByPk', 'insertMany'],
+                    excludedFields: ['age'],
+                },
+            },
+        },
+        getClient: async () => ({
+            User: {
+                async findMany() {
+                    return [];
+                },
+            },
+            user: {
+                async findMany() {
+                    return [];
+                },
+            },
+            $procs: {
+                async getUserSummary() {
+                    return { id: 1, name: 'Ada', role: 'ADMIN' };
+                },
+                async getPostSummary() {
+                    return { id: 10, title: 'Hidden' };
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /users\(where:/);
+    assert.match(printed, /insert_users_one\(object: User_insert_input!/);
+    assert.match(printed, /getUserSummary: User/);
+    assert.doesNotMatch(printed, /type Post\b/);
+    assert.doesNotMatch(printed, /posts\(where:/);
+    assert.doesNotMatch(printed, /posts_aggregate/);
+    assert.doesNotMatch(printed, /insert_users\(objects:/);
+    assert.doesNotMatch(printed, /delete_users\(where:/);
+    assert.doesNotMatch(printed, /delete_users_by_pk\(id: Int!/);
+    assert.doesNotMatch(printed, /age: Int!/);
+    assert.doesNotMatch(printed, /posts: \[Post!/);
+    assert.doesNotMatch(printed, /getPostSummary/);
+});
+
+test('prunes field-level filter operators with slicing config', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        slicing: {
+            models: {
+                post: {
+                    fields: {
+                        title: {
+                            includedFilterKinds: ['Equality'],
+                        },
+                    },
+                },
+            },
+        },
+        getClient: async () => ({
+            User: {
+                async findMany() {
+                    return [];
+                },
+            },
+            user: {
+                async findMany() {
+                    return [];
+                },
+            },
+            Post: {
+                async findMany() {
+                    return [];
+                },
+            },
+            post: {
+                async findMany() {
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /input Post_title_comparison_exp/);
+    assert.match(printed, /title: Post_title_comparison_exp/);
+    assert.doesNotMatch(printed, /input Post_title_comparison_exp\s*\{[^}]*_contains: String/);
+    assert.doesNotMatch(printed, /input Post_title_comparison_exp\s*\{[^}]*_like: String/);
+    assert.match(printed, /input Post_title_comparison_exp\s*\{[^}]*_eq:/);
+});
+
+test('prunes nested relation mutation inputs when related operations are sliced out', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        slicing: {
+            models: {
+                post: {
+                    includedOperations: ['queryMany'],
+                },
+            },
+        },
+        getClient: async () => ({
+            User: {
+                async findMany() {
+                    return [];
+                },
+            },
+            user: {
+                async findMany() {
+                    return [];
+                },
+            },
+            Post: {
+                async findMany() {
+                    return [];
+                },
+            },
+            post: {
+                async findMany() {
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.doesNotMatch(printed, /input User_insert_input[\s\S]*posts:/);
+    assert.doesNotMatch(printed, /input User_set_input[\s\S]*posts:/);
+    assert.doesNotMatch(printed, /insert_posts_one/);
+    assert.doesNotMatch(printed, /update_posts_by_pk/);
+});
+
 test('executes nested reads and aggregates with Hasura-like args', async () => {
     const { client } = createInMemoryClient();
     const graphqlSchema = createZenStackGraphQLSchema({

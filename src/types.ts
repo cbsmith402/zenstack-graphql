@@ -248,6 +248,52 @@ export interface FeatureFlags {
     exposeInternalFields?: boolean;
 }
 
+export type SchemaFilterKind =
+    | 'Equality'
+    | 'Range'
+    | 'Like'
+    | 'Relation'
+    | 'Json'
+    | 'List';
+
+export type SchemaCrudOperation =
+    | 'findMany'
+    | 'queryMany'
+    | 'findUnique'
+    | 'queryByPk'
+    | 'aggregate'
+    | 'createMany'
+    | 'insertMany'
+    | 'create'
+    | 'insertOne'
+    | 'updateMany'
+    | 'update'
+    | 'updateByPk'
+    | 'deleteMany'
+    | 'delete'
+    | 'deleteByPk';
+
+export interface FieldSlicingConfig {
+    includedFilterKinds?: SchemaFilterKind[];
+    excludedFilterKinds?: SchemaFilterKind[];
+}
+
+export interface ModelSlicingConfig {
+    includedOperations?: SchemaCrudOperation[];
+    excludedOperations?: SchemaCrudOperation[];
+    includedFields?: string[];
+    excludedFields?: string[];
+    fields?: Record<string, FieldSlicingConfig | undefined>;
+}
+
+export interface SchemaSlicingConfig {
+    includedModels?: string[];
+    excludedModels?: string[];
+    includedProcedures?: string[];
+    excludedProcedures?: string[];
+    models?: Record<string, ModelSlicingConfig | undefined>;
+}
+
 export interface NamingStrategy {
     queryMany(model: NormalizedModelDefinition): string;
     queryByPk(model: NormalizedModelDefinition): string;
@@ -286,6 +332,7 @@ export interface CreateZenStackGraphQLSchemaOptions<TClient = unknown, TContext 
     getClient(context: TContext): TClient | Promise<TClient>;
     naming?: NamingConfig;
     features?: FeatureFlags;
+    slicing?: SchemaSlicingConfig;
     scalars?: Partial<Record<ScalarType, GraphQLScalarType>>;
     hooks?: ResolverHooks<TContext>;
     extensions?: RootFieldExtensions<TClient, TContext>;

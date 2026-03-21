@@ -27,7 +27,7 @@ const schema = createZenStackGraphQLSchema({
 
 ## Public API
 
-- `createZenStackGraphQLSchema({ schema, getClient, naming, features, scalars, hooks, extensions })`
+- `createZenStackGraphQLSchema({ schema, getClient, naming, features, slicing, scalars, hooks, extensions })`
 - `normalizeSchema(schema)`
 - `normalizeError(error)`
 
@@ -41,6 +41,7 @@ The generated schema uses Hasura-like defaults:
 - `*_insert_input` supports nested relation `data` inserts
 - `*_set_input` supports relation-aware updates for the nested mutation shapes supported by the underlying ZenStack ORM
 - `features.computedFields` enables read-only `@computed` fields detected from ZenStack-generated metadata
+- `slicing` supports schema pruning with ZenStack-style model, operation, procedure, and filter slicing, plus GraphQL field visibility pruning for role-specific schemas
 - ZModel `procedure` and `mutation procedure` definitions are exposed as GraphQL query and mutation roots via `client.$procs`
 - `extensions.query` and `extensions.mutation` let you attach manual GraphQL root fields that receive the same request-scoped ZenStack client as generated resolvers
 - `*_by_pk` roots are emitted only for real primary keys
