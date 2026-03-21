@@ -66,6 +66,23 @@ export const sampleOperations = [
 }`,
         variables: '{}',
     },
+    {
+        label: 'Atomic Rollback',
+        description:
+            'The first insert would succeed on its own, but the second one fails, so the whole mutation rolls back.',
+        query: `mutation AtomicRollback {
+  insert_users_one(object: { name: "Rollback Riley", age: 41, role: USER }) {
+    id
+    name
+  }
+
+  insert_posts_one(object: { title: "Broken Foreign Key", authorId: 999999, views: 1 }) {
+    id
+    title
+  }
+}`,
+        variables: '{}',
+    },
 ];
 
 export const zmodelSource = `datasource db {

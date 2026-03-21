@@ -22,6 +22,7 @@ import {
 } from 'graphql';
 
 import { normalizeError } from './errors.js';
+import { getExecutionClient, registerExecutionMetadata } from './execution.js';
 import {
     getIdentifierFields,
     getScalarFields,
@@ -377,7 +378,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             };
         }
 
-        return new GraphQLSchema({
+        const schema = new GraphQLSchema({
             query: new GraphQLObjectType({
                 name: 'Query',
                 fields: () => queryFields,
@@ -387,6 +388,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 fields: () => mutationFields,
             }),
         });
+
+        registerExecutionMetadata(schema, {
+            getClient: this.options.getClient,
+        });
+
+        return schema;
     }
 
     private getModel(modelName: string) {
@@ -838,7 +845,9 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             await this.options.hooks?.beforeResolve?.(invocation);
 
             try {
-                const client = (await this.options.getClient(context)) as TClient;
+                const client =
+                    getExecutionClient<TClient>() ??
+                    ((await this.options.getClient(context)) as TClient);
                 const result = await handler({ client, args, context, info });
                 await this.options.hooks?.afterResolve?.(result, invocation);
                 return result;
@@ -866,7 +875,9 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 return relationField.isList ? [] : null;
             }
 
-            const client = (await this.options.getClient(context)) as TClient;
+            const client =
+                getExecutionClient<TClient>() ??
+                ((await this.options.getClient(context)) as TClient);
             const delegate = this.getRequiredDelegate(client, model);
             if (!delegate.findUnique) {
                 return relationField.isList ? [] : null;

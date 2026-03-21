@@ -1,13 +1,23 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { graphql, printSchema } from 'graphql';
 
-import { createZenStackGraphQLSchema } from '../src/index.js';
+import { createZenStackGraphQLSchema, graphql, printSchema } from '../src/index.js';
+import type { ModelDelegate, ZenStackClientLike } from '../src/index.js';
 import { createInMemoryClient, schema } from './helpers.js';
 
 function toPlain<T>(value: T): T {
     return JSON.parse(JSON.stringify(value));
 }
+
+type MutationDelegate = Required<Pick<ModelDelegate, 'create' | 'update'>>;
+type TransactionTestClient = Omit<ZenStackClientLike, '$transaction'> & {
+    User: MutationDelegate;
+    user: MutationDelegate;
+    $transaction: {
+        <T>(operations: Promise<T>[]): Promise<T[]>;
+        <T>(callback: (tx: TransactionTestClient) => Promise<T>): Promise<T>;
+    };
+};
 
 test('generates Hasura-style root fields and types', async () => {
     const { client } = createInMemoryClient();
@@ -224,4 +234,203 @@ test('omits insensitive mode for sqlite-backed string filters', async () => {
             contains: 'Ada',
         },
     });
+});
+
+test('wraps an entire mutation operation in one interactive transaction', async () => {
+    let transactionCalls = 0;
+    const writes: string[] = [];
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => {
+            let activeWrites: string[] = [];
+            function transaction<T>(operations: Promise<T>[]): Promise<T[]>;
+            function transaction<T>(
+                callback: (tx: TransactionTestClient) => Promise<T>
+            ): Promise<T>;
+            async function transaction<T>(
+                input: Promise<T>[] | ((tx: TransactionTestClient) => Promise<T>)
+            ): Promise<T[] | T> {
+                if (Array.isArray(input)) {
+                    return Promise.all(input);
+                }
+
+                transactionCalls += 1;
+                const previousWrites = activeWrites;
+                activeWrites = [];
+                try {
+                    const result = await input(client);
+                    writes.push(...activeWrites);
+                    return result;
+                } finally {
+                    activeWrites = previousWrites;
+                }
+            }
+
+            let client: TransactionTestClient;
+            client = {
+                User: {
+                    async create(args?: Record<string, unknown>) {
+                        activeWrites.push(
+                            `create:${(args?.data as { name?: string } | undefined)?.name ?? 'Unknown'}`
+                        );
+                        return {
+                            id: 9,
+                            name: (args?.data as { name?: string } | undefined)?.name ?? 'Unknown',
+                        };
+                    },
+                    async update(args?: Record<string, unknown>) {
+                        activeWrites.push(
+                            `update:${(args?.data as { name?: string } | undefined)?.name ?? 'Unknown'}`
+                        );
+                        return {
+                            id: (args?.where as { id?: number } | undefined)?.id ?? 0,
+                            name: (args?.data as { name?: string } | undefined)?.name ?? 'Unknown',
+                        };
+                    },
+                },
+                user: {
+                    async create(args?: Record<string, unknown>) {
+                        activeWrites.push(
+                            `create:${(args?.data as { name?: string } | undefined)?.name ?? 'Unknown'}`
+                        );
+                        return {
+                            id: 9,
+                            name: (args?.data as { name?: string } | undefined)?.name ?? 'Unknown',
+                        };
+                    },
+                    async update(args?: Record<string, unknown>) {
+                        activeWrites.push(
+                            `update:${(args?.data as { name?: string } | undefined)?.name ?? 'Unknown'}`
+                        );
+                        return {
+                            id: (args?.where as { id?: number } | undefined)?.id ?? 0,
+                            name: (args?.data as { name?: string } | undefined)?.name ?? 'Unknown',
+                        };
+                    },
+                },
+                $transaction: transaction,
+            };
+
+            return client;
+        },
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            mutation {
+                insert_users_one(object: { id: 9, name: "Tess", age: 27, role: USER }) {
+                    id
+                    name
+                }
+                update_users_by_pk(id: 9, _set: { name: "Tessa" }) {
+                    id
+                    name
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.equal(transactionCalls, 1);
+    assert.deepEqual(writes, ['create:Tess', 'update:Tessa']);
+    assert.deepEqual(toPlain(result.data), {
+        insert_users_one: {
+            id: 9,
+            name: 'Tess',
+        },
+        update_users_by_pk: {
+            id: 9,
+            name: 'Tessa',
+        },
+    });
+});
+
+test('rolls back the transaction when any mutation field errors', async () => {
+    let transactionCalls = 0;
+    const committedWrites: string[] = [];
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => {
+            let pendingWrites: string[] = [];
+            function transaction<T>(operations: Promise<T>[]): Promise<T[]>;
+            function transaction<T>(
+                callback: (tx: TransactionTestClient) => Promise<T>
+            ): Promise<T>;
+            async function transaction<T>(
+                input: Promise<T>[] | ((tx: TransactionTestClient) => Promise<T>)
+            ): Promise<T[] | T> {
+                if (Array.isArray(input)) {
+                    return Promise.all(input);
+                }
+
+                transactionCalls += 1;
+                const previousWrites = pendingWrites;
+                pendingWrites = [];
+                try {
+                    const result = await input(client);
+                    committedWrites.push(...pendingWrites);
+                    return result;
+                } finally {
+                    pendingWrites = previousWrites;
+                }
+            }
+
+            let client: TransactionTestClient;
+            client = {
+                User: {
+                    async create(args?: Record<string, unknown>) {
+                        pendingWrites.push(
+                            `create:${(args?.data as { name?: string } | undefined)?.name ?? 'Unknown'}`
+                        );
+                        return {
+                            id: 10,
+                            name: (args?.data as { name?: string } | undefined)?.name ?? 'Unknown',
+                        };
+                    },
+                    async update() {
+                        throw new Error('boom');
+                    },
+                },
+                user: {
+                    async create(args?: Record<string, unknown>) {
+                        pendingWrites.push(
+                            `create:${(args?.data as { name?: string } | undefined)?.name ?? 'Unknown'}`
+                        );
+                        return {
+                            id: 10,
+                            name: (args?.data as { name?: string } | undefined)?.name ?? 'Unknown',
+                        };
+                    },
+                    async update() {
+                        throw new Error('boom');
+                    },
+                },
+                $transaction: transaction,
+            };
+
+            return client;
+        },
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            mutation {
+                insert_users_one(object: { id: 10, name: "Mina", age: 31, role: USER }) {
+                    id
+                    name
+                }
+                update_users_by_pk(id: 10, _set: { name: "Broken" }) {
+                    id
+                    name
+                }
+            }
+        `,
+    });
+
+    assert.equal(transactionCalls, 1);
+    assert.equal(committedWrites.length, 0);
+    assert.equal(result.data, null);
+    assert.match(result.errors?.[0]?.message ?? '', /boom/);
 });

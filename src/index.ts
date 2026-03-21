@@ -1,4 +1,5 @@
-export { graphql, printSchema } from 'graphql';
+export { printSchema } from 'graphql';
+export { graphql } from './execution.js';
 export { createZenStackGraphQLSchema } from './schema.js';
 export { normalizeSchema } from './metadata.js';
 export { normalizeError } from './errors.js';
@@ -17,5 +18,6 @@ export type {
     ScalarFieldDefinition,
     ScalarType,
     ZenStackClientLike,
+    ZenStackGraphQLExecutionMetadata,
     ZenStackSchemaLike,
 } from './types.js';

@@ -34,6 +34,12 @@ export function Playground({
     const [status, setStatus] = useState('Ready');
     const [isPending, startTransition] = useTransition();
 
+    async function refreshSnapshot() {
+        const response = await fetch('/api/state');
+        const payload = (await response.json()) as { snapshot: Snapshot };
+        setSnapshot(payload.snapshot);
+    }
+
     function applySample(sample: SampleOperation) {
         setQuery(sample.query);
         setVariables(sample.variables);
@@ -57,6 +63,7 @@ export function Playground({
                 });
                 const payload = await response.json();
                 setResult(JSON.stringify(payload, null, 2));
+                await refreshSnapshot();
                 setStatus(payload.errors ? 'GraphQL returned errors.' : 'Query completed successfully.');
             } catch (error) {
                 const message = error instanceof Error ? error.message : 'Unknown request failure';
@@ -68,7 +75,7 @@ export function Playground({
 
     async function resetData() {
         startTransition(async () => {
-            setStatus('Resetting in-memory demo data...');
+            setStatus('Resetting SQLite demo data...');
             const response = await fetch('/api/reset', { method: 'POST' });
             const payload = (await response.json()) as { snapshot: Snapshot };
             setSnapshot(payload.snapshot);
@@ -85,8 +92,9 @@ export function Playground({
                         <h1>Test the adapter with a real GraphQL route.</h1>
                         <p>
                             This sample wraps the local <code>zenstack-graphql</code> package in a
-                            Next.js App Router project. The API route uses an in-memory store so you
-                            can try queries and mutations instantly, then reset the data between runs.
+                            Next.js App Router project. The API route runs against a real ZenStack
+                            schema backed by SQLite, so you can try queries, mutations, and
+                            transaction rollbacks end to end.
                         </p>
                         <div className="pill-row">
                             <span className="pill">Hasura-style root fields</span>
@@ -126,6 +134,12 @@ npm run dev`}</pre>
                     <strong>Reset Seed Data</strong>
                     <span className="muted">
                         POST <code>/api/reset</code>
+                    </span>
+                </div>
+                <div className="meta-box">
+                    <strong>Current SQLite State</strong>
+                    <span className="muted">
+                        GET <code>/api/state</code>
                     </span>
                 </div>
             </section>

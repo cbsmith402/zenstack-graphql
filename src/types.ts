@@ -209,4 +209,12 @@ export interface ModelDelegate {
 
 export type ZenStackClientLike = Record<string, ModelDelegate | unknown> & {
     $transaction?<T>(operations: Promise<T>[]): Promise<T[]>;
+    $transaction?<T>(callback: (tx: ZenStackClientLike) => Promise<T>): Promise<T>;
 };
+
+export interface ZenStackGraphQLExecutionMetadata<
+    TClient extends ZenStackClientLike = ZenStackClientLike,
+    TContext = unknown,
+> {
+    getClient(context: TContext): TClient | Promise<TClient>;
+}
