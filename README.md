@@ -1,6 +1,6 @@
 # zenstack-graphql
 
-`zenstack-graphql` is a standalone GraphQL adapter for ZenStack-style model metadata. It generates a framework-agnostic `GraphQLSchema` with Hasura-like CRUD roots, model-driven filters and ordering, aggregates, and core insert/update/delete mutations.
+`zenstack-graphql` is a standalone GraphQL adapter for ZenStack-style model metadata. It generates a framework-agnostic `GraphQLSchema` with Hasura-like CRUD roots, model-driven filters and ordering, aggregates, nested relation inserts, and core insert/update/delete mutations.
 
 ## Usage
 
@@ -35,12 +35,14 @@ The generated schema uses Hasura-like defaults:
 
 - Query roots: `users`, `users_by_pk`, `users_aggregate`
 - Mutation roots: `insert_users`, `insert_users_one`, `update_users`, `update_users_by_pk`, `delete_users`, `delete_users_by_pk`
+- `insert_*_one` supports `on_conflict`
+- `*_insert_input` supports nested relation `data` inserts
 
 ## Notes
 
 - The adapter accepts a normalized metadata object today so it can work as a standalone package before being wired into a full ZenStack V3 repository.
 - Delegates are expected to look Prisma-like (`findMany`, `findUnique`, `aggregate`, `create`, `update`, `delete`, and optional bulk variants).
-- Subscriptions, conflict clauses, and custom procedures are intentionally deferred.
+- Subscriptions and custom procedures are intentionally deferred.
 
 ## Next.js Demo
 

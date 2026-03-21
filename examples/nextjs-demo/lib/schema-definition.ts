@@ -52,6 +52,47 @@ export const sampleOperations = [
         variables: '{}',
     },
     {
+        label: 'Nested Insert + Upsert',
+        description: 'Create related rows in one mutation and update an existing row with on_conflict.',
+        query: `mutation NestedInsertAndUpsert {
+  insert_users_one(
+    object: {
+      name: "Cara"
+      age: 25
+      role: USER
+      posts: {
+        data: [
+          { title: "Nested One", views: 2 }
+          { title: "Nested Two", views: 7 }
+        ]
+      }
+    }
+  ) {
+    id
+    name
+    posts(order_by: [{ views: desc }]) {
+      id
+      title
+      views
+    }
+  }
+
+  upsert_user: insert_users_one(
+    object: { id: 2, name: "Benny", age: 21, role: USER }
+    on_conflict: {
+      constraint: User_pkey
+      update_columns: [name, age]
+    }
+  ) {
+    id
+    name
+    age
+    role
+  }
+}`,
+        variables: '{}',
+    },
+    {
         label: 'Filtered Search',
         description: 'Use Hasura-style filters against relation data in SQLite.',
         query: `query RelatedFilter {

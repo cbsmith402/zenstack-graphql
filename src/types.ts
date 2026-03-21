@@ -201,6 +201,7 @@ export interface ModelDelegate {
     create?(args: Record<string, unknown>): Promise<unknown>;
     createMany?(args: Record<string, unknown>): Promise<{ count: number }>;
     createManyAndReturn?(args: Record<string, unknown>): Promise<unknown[]>;
+    upsert?(args: Record<string, unknown>): Promise<unknown>;
     update?(args: Record<string, unknown>): Promise<unknown>;
     updateMany?(args: Record<string, unknown>): Promise<{ count: number }>;
     delete?(args: Record<string, unknown>): Promise<unknown>;

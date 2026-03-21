@@ -34,6 +34,8 @@ type QueryArgs = {
     _sum?: Record<string, unknown>;
     _min?: Record<string, unknown>;
     _max?: Record<string, unknown>;
+    create?: Record<string, unknown> | Record<string, unknown>[];
+    update?: Record<string, unknown>;
 };
 
 export const schema: {
@@ -86,6 +88,10 @@ function cloneStore(seed?: Partial<DataStore>): DataStore {
             { id: 12, title: 'GraphQL Adapter', authorId: 2, views: 13 },
         ],
     };
+}
+
+function nextId(records: Array<{ id: number }>) {
+    return records.reduce((max, record) => Math.max(max, record.id), 0) + 1;
 }
 
 function matchesScalarFilter(value: unknown, filter: unknown) {
@@ -439,12 +445,26 @@ function createUserDelegate(store: DataStore) {
         async create(args: QueryArgs = {}) {
             const data = isRecord(args.data) ? args.data : {};
             const record: UserRecord = {
-                id: Number(data.id),
+                id: data.id === undefined ? nextId(store.users) : Number(data.id),
                 name: String(data.name),
                 age: Number(data.age),
                 role: data.role === 'ADMIN' ? 'ADMIN' : 'USER',
             };
             store.users.push(record);
+
+            const posts = isRecord(data.posts) && Array.isArray(data.posts.create) ? data.posts.create : [];
+            for (const post of posts) {
+                if (!isRecord(post)) {
+                    continue;
+                }
+                store.posts.push({
+                    id: post.id === undefined ? nextId(store.posts) : Number(post.id),
+                    title: String(post.title),
+                    authorId: record.id,
+                    views: post.views === undefined ? 0 : Number(post.views),
+                });
+            }
+
             return applySelect(store, 'User', record, args.select);
         },
         async createMany(args: QueryArgs = {}) {
@@ -479,6 +499,19 @@ function createUserDelegate(store: DataStore) {
                 created.push(applySelect(store, 'User', record, args.select));
             }
             return created;
+        },
+        async upsert(args: QueryArgs = {}) {
+            const where = isRecord(args.where) ? args.where : {};
+            const existing = store.users.find((record) => matchesUnique(record, where));
+            if (existing) {
+                applyDataPatch(existing as Record<string, unknown>, isRecord(args.update) ? args.update : {});
+                return applySelect(store, 'User', existing, args.select);
+            }
+
+            return this.create({
+                data: isRecord(args.create) ? args.create : {},
+                select: args.select,
+            });
         },
         async update(args: QueryArgs = {}) {
             const entry = store.users.find((record) => matchesUnique(record, args.where));
@@ -536,11 +569,23 @@ function createPostDelegate(store: DataStore) {
         },
         async create(args: QueryArgs = {}) {
             const data = isRecord(args.data) ? args.data : {};
+            let authorId = data.authorId === undefined ? undefined : Number(data.authorId);
+            if (isRecord(data.author) && isRecord(data.author.create)) {
+                const author = data.author.create;
+                const createdAuthor: UserRecord = {
+                    id: author.id === undefined ? nextId(store.users) : Number(author.id),
+                    name: String(author.name),
+                    age: Number(author.age),
+                    role: author.role === 'ADMIN' ? 'ADMIN' : 'USER',
+                };
+                store.users.push(createdAuthor);
+                authorId = createdAuthor.id;
+            }
             const record: PostRecord = {
-                id: Number(data.id),
+                id: data.id === undefined ? nextId(store.posts) : Number(data.id),
                 title: String(data.title),
-                authorId: Number(data.authorId),
-                views: Number(data.views),
+                authorId: Number(authorId),
+                views: data.views === undefined ? 0 : Number(data.views),
             };
             store.posts.push(record);
             return applySelect(store, 'Post', record, args.select);
@@ -577,6 +622,19 @@ function createPostDelegate(store: DataStore) {
                 created.push(applySelect(store, 'Post', record, args.select));
             }
             return created;
+        },
+        async upsert(args: QueryArgs = {}) {
+            const where = isRecord(args.where) ? args.where : {};
+            const existing = store.posts.find((record) => matchesUnique(record, where));
+            if (existing) {
+                applyDataPatch(existing as Record<string, unknown>, isRecord(args.update) ? args.update : {});
+                return applySelect(store, 'Post', existing, args.select);
+            }
+
+            return this.create({
+                data: isRecord(args.create) ? args.create : {},
+                select: args.select,
+            });
         },
         async update(args: QueryArgs = {}) {
             const entry = store.posts.find((record) => matchesUnique(record, args.where));

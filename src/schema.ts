@@ -64,7 +64,7 @@ const DEFAULT_FEATURES: Required<FeatureFlags> = {
     aggregates: true,
     nestedArgs: true,
     computedFields: false,
-    conflictClauses: false,
+    conflictClauses: true,
     subscriptions: false,
     exposeInternalFields: false,
 };
@@ -273,8 +273,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly whereInputs = new Map<string, GraphQLInputObjectType>();
     private readonly orderInputs = new Map<string, GraphQLInputObjectType>();
     private readonly insertInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly relationInsertInputs = new Map<string, GraphQLInputObjectType>();
     private readonly setInputs = new Map<string, GraphQLInputObjectType>();
     private readonly incInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly constraintEnums = new Map<string, GraphQLEnumType>();
+    private readonly updateColumnEnums = new Map<string, GraphQLEnumType>();
+    private readonly onConflictInputs = new Map<string, GraphQLInputObjectType>();
     private readonly mutationResponseTypes = new Map<string, GraphQLObjectType>();
     private readonly aggregateTypes = new Map<string, GraphQLObjectType>();
     private readonly aggregateFieldsTypes = new Map<string, GraphQLObjectType>();
@@ -364,14 +368,16 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 type: this.getModelObjectType(model),
                 args: {
                     object: { type: new GraphQLNonNull(this.getInsertInput(model)) },
+                    ...(this.features.conflictClauses && this.getConflictConstraints(model).length > 0
+                        ? {
+                              on_conflict: {
+                                  type: this.getOnConflictInput(model),
+                              },
+                          }
+                        : {}),
                 },
                 resolve: this.createResolver('insertOne', model, async ({ client, args, info }) => {
-                    const delegate = this.getRequiredDelegate(client, model);
-                    this.assertMethod(delegate, 'create', model);
-                    return delegate.create!({
-                        data: args.object,
-                        select: this.buildSelection(model, info.fieldNodes, info),
-                    });
+                    return this.resolveInsertOne(model, client, args, info);
                 }),
             };
 
@@ -675,7 +681,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
         const input = new GraphQLInputObjectType({
             name: `${this.naming.typeName(model.name)}_insert_input`,
-            fields: () => this.getMutableInputFields(model),
+            fields: () => this.getInsertInputFields(model),
         });
 
         this.insertInputs.set(model.name, input);
@@ -720,6 +726,143 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
         this.incInputs.set(model.name, input);
         return input;
+    }
+
+    private getConflictConstraints(model: NormalizedModelDefinition) {
+        const constraints: Array<{ name: string; fields: string[] }> = [];
+
+        if (model.primaryKey.length > 0) {
+            constraints.push({
+                name: `${this.naming.typeName(model.name)}_pkey`,
+                fields: model.primaryKey,
+            });
+        }
+
+        for (const constraint of model.uniqueConstraints) {
+            const name =
+                constraint.name ??
+                `${this.naming.typeName(model.name)}_${constraint.fields.join('_')}_key`;
+            constraints.push({
+                name,
+                fields: constraint.fields,
+            });
+        }
+
+        const seen = new Set<string>();
+        return constraints.filter((constraint) => {
+            const key = `${constraint.name}:${constraint.fields.join('|')}`;
+            if (seen.has(key)) {
+                return false;
+            }
+            seen.add(key);
+            return true;
+        });
+    }
+
+    private getConstraintEnum(model: NormalizedModelDefinition) {
+        const existing = this.constraintEnums.get(model.name);
+        if (existing) {
+            return existing;
+        }
+
+        const enumType = new GraphQLEnumType({
+            name: `${this.naming.typeName(model.name)}_constraint`,
+            values: Object.fromEntries(
+                this.getConflictConstraints(model).map((constraint) => [
+                    constraint.name,
+                    { value: constraint.name },
+                ])
+            ),
+        });
+
+        this.constraintEnums.set(model.name, enumType);
+        return enumType;
+    }
+
+    private getUpdateColumnEnum(model: NormalizedModelDefinition) {
+        const existing = this.updateColumnEnums.get(model.name);
+        if (existing) {
+            return existing;
+        }
+
+        const enumType = new GraphQLEnumType({
+            name: `${this.naming.typeName(model.name)}_update_column`,
+            values: Object.fromEntries(
+                this.getMutableFields(model)
+                    .filter((field) => field.kind !== 'relation' && !field.isId)
+                    .map((field) => [field.name, { value: field.name }])
+            ),
+        });
+
+        this.updateColumnEnums.set(model.name, enumType);
+        return enumType;
+    }
+
+    private getOnConflictInput(model: NormalizedModelDefinition) {
+        const existing = this.onConflictInputs.get(model.name);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: `${this.naming.typeName(model.name)}_on_conflict`,
+            fields: () => ({
+                constraint: {
+                    type: new GraphQLNonNull(this.getConstraintEnum(model)),
+                },
+                update_columns: {
+                    type: new GraphQLNonNull(
+                        new GraphQLList(new GraphQLNonNull(this.getUpdateColumnEnum(model)))
+                    ),
+                },
+            }),
+        });
+
+        this.onConflictInputs.set(model.name, input);
+        return input;
+    }
+
+    private getRelationInsertInput(
+        model: NormalizedModelDefinition,
+        relationField: NormalizedFieldDefinition
+    ) {
+        const key = `${model.name}:${relationField.name}`;
+        const existing = this.relationInsertInputs.get(key);
+        if (existing) {
+            return existing;
+        }
+
+        const relatedModel = this.getModel(relationField.type);
+        const input = new GraphQLInputObjectType({
+            name: `${this.naming.typeName(model.name)}_${relationField.name}_rel_insert_input`,
+            fields: () => ({
+                data: {
+                    type: relationField.isList
+                        ? new GraphQLNonNull(
+                              new GraphQLList(new GraphQLNonNull(this.getInsertInput(relatedModel)))
+                          )
+                        : new GraphQLNonNull(this.getInsertInput(relatedModel)),
+                },
+            }),
+        });
+
+        this.relationInsertInputs.set(key, input);
+        return input;
+    }
+
+    private getInsertInputFields(model: NormalizedModelDefinition) {
+        const fields = this.getMutableInputFields(model);
+        for (const field of this.getVisibleFields(model)) {
+            if (field.kind !== 'relation') {
+                continue;
+            }
+
+            fields[field.name] = {
+                type: this.getRelationInsertInput(model, field),
+                description: field.description,
+            };
+        }
+        return fields;
     }
 
     private getMutableInputFields(model: NormalizedModelDefinition) {
@@ -1691,6 +1834,124 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return data;
     }
 
+    private compileInsertData(
+        model: NormalizedModelDefinition,
+        input: Record<string, unknown>
+    ): Record<string, unknown> {
+        const data: Record<string, unknown> = {};
+
+        for (const [fieldName, value] of Object.entries(input)) {
+            const field = model.fieldMap.get(fieldName);
+            if (!field || value === undefined) {
+                continue;
+            }
+
+            if (field.kind !== 'relation') {
+                data[fieldName] = value;
+                continue;
+            }
+
+            if (!isPlainObject(value) || !('data' in value)) {
+                continue;
+            }
+
+            const relatedModel = this.getModel(field.type);
+            const nestedData = value.data;
+            if (field.isList) {
+                const items = Array.isArray(nestedData)
+                    ? nestedData
+                          .filter((entry): entry is Record<string, unknown> => isPlainObject(entry))
+                          .map((entry) => this.compileInsertData(relatedModel, entry))
+                    : [];
+                data[fieldName] = { create: items };
+                continue;
+            }
+
+            if (isPlainObject(nestedData)) {
+                data[fieldName] = {
+                    create: this.compileInsertData(relatedModel, nestedData),
+                };
+            }
+        }
+
+        return data;
+    }
+
+    private hasNestedInsertData(model: NormalizedModelDefinition, input: Record<string, unknown>) {
+        return Object.keys(input).some((fieldName) => {
+            const field = model.fieldMap.get(fieldName);
+            return field?.kind === 'relation' && isPlainObject(input[fieldName]);
+        });
+    }
+
+    private buildConflictWhere(
+        model: NormalizedModelDefinition,
+        object: Record<string, unknown>,
+        conflict: Record<string, unknown>
+    ) {
+        const constraintName = conflict.constraint;
+        const constraint = this.getConflictConstraints(model).find(
+            (entry) => entry.name === constraintName
+        );
+        if (!constraint) {
+            throw new Error(`Unknown conflict constraint "${String(constraintName)}" for model "${model.name}"`);
+        }
+
+        const where: Record<string, unknown> = {};
+        for (const fieldName of constraint.fields) {
+            if (!(fieldName in object)) {
+                throw new Error(
+                    `Conflict target field "${fieldName}" is missing from insert object for model "${model.name}"`
+                );
+            }
+            where[fieldName] = object[fieldName];
+        }
+        return where;
+    }
+
+    private buildConflictUpdateData(
+        model: NormalizedModelDefinition,
+        object: Record<string, unknown>,
+        updateColumns: unknown
+    ) {
+        const allowedFields = new Set(
+            this.getMutableFields(model)
+                .filter((field) => field.kind !== 'relation' && !field.isId)
+                .map((field) => field.name)
+        );
+        const columns = Array.isArray(updateColumns)
+            ? updateColumns.filter(
+                  (entry): entry is string =>
+                      typeof entry === 'string' && allowedFields.has(entry)
+              )
+            : [];
+
+        return Object.fromEntries(
+            columns
+                .filter((fieldName) => fieldName in object)
+                .map((fieldName) => [fieldName, object[fieldName]])
+        );
+    }
+
+    private async findExistingByWhere(
+        delegate: ModelDelegate,
+        model: NormalizedModelDefinition,
+        where: Record<string, unknown>,
+        select: Record<string, unknown> | undefined
+    ) {
+        if (delegate.findUnique) {
+            return delegate.findUnique({ where, select });
+        }
+
+        this.assertMethod(delegate, 'findMany', model);
+        const rows = await delegate.findMany!({
+            where,
+            take: 1,
+            select,
+        });
+        return rows[0] ?? null;
+    }
+
     private getReturningSelection(
         model: NormalizedModelDefinition,
         info: GraphQLResolveInfo
@@ -1898,6 +2159,59 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return 0;
     }
 
+    private async resolveInsertOne(
+        model: NormalizedModelDefinition,
+        client: TClient,
+        args: Record<string, unknown>,
+        info: GraphQLResolveInfo
+    ) {
+        const delegate = this.getRequiredDelegate(client, model);
+        const object = isPlainObject(args.object) ? args.object : {};
+        const data = this.compileInsertData(model, object);
+        const selection = this.buildSelection(model, info.fieldNodes, info);
+        const conflict = isPlainObject(args.on_conflict) ? args.on_conflict : undefined;
+
+        if (!conflict) {
+            this.assertMethod(delegate, 'create', model);
+            return delegate.create!({
+                data,
+                select: selection,
+            });
+        }
+
+        const where = this.buildConflictWhere(model, object, conflict);
+        const update = this.buildConflictUpdateData(model, object, conflict.update_columns);
+
+        if (delegate.upsert) {
+            return delegate.upsert({
+                where,
+                create: data,
+                update,
+                select: selection,
+            });
+        }
+
+        const existing = await this.findExistingByWhere(delegate, model, where, selection);
+        if (existing) {
+            if (Object.keys(update).length === 0) {
+                return existing;
+            }
+
+            this.assertMethod(delegate, 'update', model);
+            return delegate.update!({
+                where,
+                data: update,
+                select: selection,
+            });
+        }
+
+        this.assertMethod(delegate, 'create', model);
+        return delegate.create!({
+            data,
+            select: selection,
+        });
+    }
+
     private async resolveInsertMany(
         model: NormalizedModelDefinition,
         client: TClient,
@@ -1913,14 +2227,21 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             return { affected_rows: 0, returning: [] };
         }
 
-        if (!wantsReturning && delegate.createMany) {
-            const result = await delegate.createMany({ data: objects });
+        const compiledObjects = objects
+            .filter((entry): entry is Record<string, unknown> => isPlainObject(entry))
+            .map((entry) => this.compileInsertData(model, entry));
+        const hasNestedObjects = objects.some(
+            (entry) => isPlainObject(entry) && this.hasNestedInsertData(model, entry)
+        );
+
+        if (!wantsReturning && delegate.createMany && !hasNestedObjects) {
+            const result = await delegate.createMany({ data: compiledObjects });
             return { affected_rows: result.count, returning: [] };
         }
 
-        if (wantsReturning && delegate.createManyAndReturn) {
+        if (wantsReturning && delegate.createManyAndReturn && !hasNestedObjects) {
             const rows = await delegate.createManyAndReturn({
-                data: objects,
+                data: compiledObjects,
                 select: returningSelection,
             });
             return {
@@ -1931,7 +2252,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
         this.assertMethod(delegate, 'create', model);
         const returning = [];
-        for (const object of objects) {
+        for (const object of compiledObjects) {
             const created = await delegate.create!({
                 data: object,
                 select: returningSelection,
@@ -1942,7 +2263,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         return {
-            affected_rows: objects.length,
+            affected_rows: compiledObjects.length,
             returning,
         };
     }
