@@ -67,6 +67,33 @@ export const sampleOperations = [
         variables: '{}',
     },
     {
+        label: 'Relation Aggregate',
+        description: 'Query Hasura-style relation aggregate fields generated from the ZenStack models.',
+        query: `query RelationAggregate {
+  users(order_by: [{ id: asc }]) {
+    id
+    name
+    posts_aggregate(order_by: [{ views: desc }]) {
+      aggregate {
+        count
+        sum {
+          views
+        }
+        max {
+          views
+        }
+      }
+      nodes {
+        id
+        title
+        views
+      }
+    }
+  }
+}`,
+        variables: '{}',
+    },
+    {
         label: 'Atomic Rollback',
         description:
             'The first insert would succeed on its own, but the second one fails, so the whole mutation rolls back.',

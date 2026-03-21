@@ -24,6 +24,7 @@ type EntityRecord = UserRecord | PostRecord;
 type QueryArgs = {
     where?: Record<string, unknown>;
     orderBy?: Record<string, unknown> | Record<string, unknown>[];
+    distinct?: string[];
     take?: number;
     skip?: number;
     select?: Record<string, unknown>;
@@ -136,6 +137,16 @@ function matchesScalarFilter(value: unknown, filter: unknown) {
 }
 
 function compareValues(left: unknown, right: unknown) {
+    if (left == null && right == null) {
+        return 0;
+    }
+    if (left == null) {
+        return -1;
+    }
+    if (right == null) {
+        return 1;
+    }
+
     if (left === right) {
         return 0;
     }
@@ -158,6 +169,24 @@ function compareValues(left: unknown, right: unknown) {
     return leftValue > rightValue ? 1 : -1;
 }
 
+function applyDistinct<T extends Record<string, unknown>>(records: T[], distinct?: string[]) {
+    if (!distinct || distinct.length === 0) {
+        return [...records];
+    }
+
+    const seen = new Set<string>();
+    const result: T[] = [];
+    for (const record of records) {
+        const key = JSON.stringify(distinct.map((field) => record[field] ?? null));
+        if (seen.has(key)) {
+            continue;
+        }
+        seen.add(key);
+        result.push(record);
+    }
+    return result;
+}
+
 function sortRecords<T extends Record<string, unknown>>(records: T[], orderBy?: QueryArgs['orderBy']) {
     if (!orderBy) {
         return [...records];
@@ -168,11 +197,46 @@ function sortRecords<T extends Record<string, unknown>>(records: T[], orderBy?: 
     sorted.sort((left, right) => {
         for (const clause of clauses) {
             for (const [field, direction] of Object.entries(clause)) {
+                const ordering =
+                    typeof direction === 'string'
+                        ? { sort: direction, nulls: undefined }
+                        : isRecord(direction) &&
+                            (direction.sort === 'asc' || direction.sort === 'desc')
+                          ? {
+                                sort: direction.sort,
+                                nulls:
+                                    direction.nulls === 'first' || direction.nulls === 'last'
+                                        ? direction.nulls
+                                        : undefined,
+                            }
+                          : null;
+                if (!ordering) {
+                    continue;
+                }
+
+                const leftValue = left[field];
+                const rightValue = right[field];
+                if (leftValue == null || rightValue == null) {
+                    if (leftValue == null && rightValue == null) {
+                        continue;
+                    }
+
+                    const nullComparison =
+                        ordering.nulls === 'last'
+                            ? leftValue == null
+                                ? 1
+                                : -1
+                            : leftValue == null
+                              ? -1
+                              : 1;
+                    return ordering.sort === 'desc' ? -nullComparison : nullComparison;
+                }
+
                 const comparison = compareValues(left[field], right[field]);
                 if (comparison === 0) {
                     continue;
                 }
-                return direction === 'desc' ? -comparison : comparison;
+                return ordering.sort === 'desc' ? -comparison : comparison;
             }
         }
         return 0;
@@ -278,11 +342,14 @@ function applySelect(
 
         if (modelName === 'User' && key === 'posts' && isRecord(value)) {
             const relationArgs = value as QueryArgs;
-            const posts = sortRecords(
-                getUserPosts(store, record as UserRecord).filter((post) =>
-                    recordMatches(store, 'Post', post, relationArgs.where)
+            const posts = applyDistinct(
+                sortRecords(
+                    getUserPosts(store, record as UserRecord).filter((post) =>
+                        recordMatches(store, 'Post', post, relationArgs.where)
+                    ),
+                    relationArgs.orderBy
                 ),
-                relationArgs.orderBy
+                relationArgs.distinct
             )
                 .slice(
                     relationArgs.skip ?? 0,
@@ -304,10 +371,11 @@ function applySelect(
 }
 
 function computeAggregate<T extends Record<string, unknown>>(records: T[], args: QueryArgs) {
+    const distinctRecords = applyDistinct(records, args.distinct);
     const response: Record<string, unknown> = {};
 
     if (args._count) {
-        response._count = { _all: records.length };
+        response._count = { _all: distinctRecords.length };
     }
 
     for (const aggregateKey of ['_avg', '_sum', '_min', '_max'] as const) {
@@ -318,7 +386,9 @@ function computeAggregate<T extends Record<string, unknown>>(records: T[], args:
 
         response[aggregateKey] = Object.fromEntries(
             fields.map((field) => {
-                const numericValues = records.map((record) => Number(record[field])).filter((value) => !Number.isNaN(value));
+                const numericValues = distinctRecords
+                    .map((record) => Number(record[field]))
+                    .filter((value) => !Number.isNaN(value));
                 if (numericValues.length === 0) {
                     return [field, null];
                 }
@@ -346,9 +416,12 @@ function matchesUnique<T extends Record<string, unknown>>(record: T, where?: Rec
 function createUserDelegate(store: DataStore) {
     return {
         async findMany(args: QueryArgs = {}) {
-            return sortRecords(
-                store.users.filter((record) => recordMatches(store, 'User', record, args.where)),
-                args.orderBy
+            return applyDistinct(
+                sortRecords(
+                    store.users.filter((record) => recordMatches(store, 'User', record, args.where)),
+                    args.orderBy
+                ),
+                args.distinct
             )
                 .slice(args.skip ?? 0, args.take ? (args.skip ?? 0) + args.take : undefined)
                 .map((record) => applySelect(store, 'User', record, args.select));
@@ -441,9 +514,12 @@ function createUserDelegate(store: DataStore) {
 function createPostDelegate(store: DataStore) {
     return {
         async findMany(args: QueryArgs = {}) {
-            return sortRecords(
-                store.posts.filter((record) => recordMatches(store, 'Post', record, args.where)),
-                args.orderBy
+            return applyDistinct(
+                sortRecords(
+                    store.posts.filter((record) => recordMatches(store, 'Post', record, args.where)),
+                    args.orderBy
+                ),
+                args.distinct
             )
                 .slice(args.skip ?? 0, args.take ? (args.skip ?? 0) + args.take : undefined)
                 .map((record) => applySelect(store, 'Post', record, args.select));

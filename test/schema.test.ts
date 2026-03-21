@@ -98,6 +98,81 @@ test('executes nested reads and aggregates with Hasura-like args', async () => {
     });
 });
 
+test('supports distinct_on, aggregate count args, and relation aggregate fields', async () => {
+    const { client } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => client,
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                posts(distinct_on: [authorId], order_by: [{ authorId: asc }, { views: desc }]) {
+                    id
+                    title
+                    authorId
+                    views
+                }
+                posts_aggregate {
+                    aggregate {
+                        count
+                        distinct_authors: count(columns: [authorId], distinct: true)
+                    }
+                }
+                users_by_pk(id: 1) {
+                    id
+                    posts_aggregate(order_by: [{ views: desc }]) {
+                        aggregate {
+                            count
+                            sum {
+                                views
+                            }
+                            max {
+                                views
+                            }
+                        }
+                        nodes {
+                            id
+                            title
+                            views
+                        }
+                    }
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        posts: [
+            { id: 11, title: 'Hasura Notes', authorId: 1, views: 8 },
+            { id: 12, title: 'GraphQL Adapter', authorId: 2, views: 13 },
+        ],
+        posts_aggregate: {
+            aggregate: {
+                count: 3,
+                distinct_authors: 2,
+            },
+        },
+        users_by_pk: {
+            id: 1,
+            posts_aggregate: {
+                aggregate: {
+                    count: 2,
+                    sum: { views: 13 },
+                    max: { views: 8 },
+                },
+                nodes: [
+                    { id: 11, title: 'Hasura Notes', views: 8 },
+                    { id: 10, title: 'ZenStack Intro', views: 5 },
+                ],
+            },
+        },
+    });
+});
+
 test('executes insert, update, and delete mutations', async () => {
     const { client, store } = createInMemoryClient();
     const graphqlSchema = createZenStackGraphQLSchema({
@@ -232,6 +307,46 @@ test('omits insensitive mode for sqlite-backed string filters', async () => {
     assert.deepEqual(capturedWhere, {
         name: {
             contains: 'Ada',
+        },
+    });
+});
+
+test('preserves null ordering directives in compiled orderBy args', async () => {
+    let capturedOrderBy: unknown;
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => ({
+            User: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedOrderBy = args?.orderBy;
+                    return [];
+                },
+            },
+            user: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedOrderBy = args?.orderBy;
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                users(order_by: [{ name: asc_nulls_last }]) {
+                    id
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(capturedOrderBy, {
+        name: {
+            sort: 'asc',
+            nulls: 'last',
         },
     });
 });
