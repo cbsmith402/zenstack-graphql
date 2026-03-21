@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm run zen:generate && next build",
-    "dev": "npm run zen:generate && next dev",
+    "adapter:build": "npm run build --prefix ../..",
+    "build": "npm run adapter:build && npm run zen:generate && next build",
+    "dev": "npm run adapter:build && npm run zen:generate && next dev",
     "start": "next start",
-    "typecheck": "npm run zen:generate && tsc --noEmit",
+    "typecheck": "npm run adapter:build && npm run zen:generate && tsc --noEmit",
     "zen:generate": "zenstack generate --no-tips"
   },
   "dependencies": {

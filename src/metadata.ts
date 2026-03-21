@@ -191,6 +191,7 @@ export function normalizeSchema(schema: ZenStackSchemaLike | ModelDefinition[]):
           );
 
     return {
+        provider: schemaInput.provider,
         models,
         modelMap: new Map(models.map((model) => [model.name, model])),
         enums,

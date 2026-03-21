@@ -225,6 +225,10 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         this.naming = resolveNamingStrategy(options.naming);
     }
 
+    private supportsInsensitiveMode() {
+        return this.normalizedSchema.provider?.type !== 'sqlite';
+    }
+
     createSchema() {
         const queryFields: GraphQLFieldConfigMap<unknown, TContext> = {};
         const mutationFields: GraphQLFieldConfigMap<unknown, TContext> = {};
@@ -1140,27 +1144,36 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     break;
                 case '_icontains':
                     result.contains = value;
-                    result.mode = 'insensitive';
+                    if (this.supportsInsensitiveMode()) {
+                        result.mode = 'insensitive';
+                    }
                     break;
                 case '_starts_with':
                     result.startsWith = value;
                     break;
                 case '_istarts_with':
                     result.startsWith = value;
-                    result.mode = 'insensitive';
+                    if (this.supportsInsensitiveMode()) {
+                        result.mode = 'insensitive';
+                    }
                     break;
                 case '_ends_with':
                     result.endsWith = value;
                     break;
                 case '_iends_with':
                     result.endsWith = value;
-                    result.mode = 'insensitive';
+                    if (this.supportsInsensitiveMode()) {
+                        result.mode = 'insensitive';
+                    }
                     break;
                 case '_like':
                     Object.assign(result, likePatternToFilter(String(value)));
                     break;
                 case '_ilike':
-                    Object.assign(result, likePatternToFilter(String(value), true));
+                    Object.assign(
+                        result,
+                        likePatternToFilter(String(value), this.supportsInsensitiveMode())
+                    );
                     break;
                 default:
                     if (field.kind === 'enum') {

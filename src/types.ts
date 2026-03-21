@@ -69,6 +69,9 @@ export interface EnumDefinition {
 }
 
 export interface ZenStackSchemaLike {
+    provider?: {
+        type?: string;
+    };
     models?:
         | ModelDefinition[]
         | Record<string, ModelDefinition>
@@ -111,6 +114,9 @@ export interface NormalizedModelDefinition {
 }
 
 export interface NormalizedSchema {
+    provider?: {
+        type?: string;
+    };
     models: NormalizedModelDefinition[];
     modelMap: Map<string, NormalizedModelDefinition>;
     enums: NormalizedEnumDefinition[];

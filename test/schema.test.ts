@@ -183,3 +183,45 @@ test('invokes hooks and normalizes auth-like errors', async () => {
     assert.equal(denied.data, null);
     assert.equal(denied.errors?.[0]?.extensions?.code, 'FORBIDDEN');
 });
+
+test('omits insensitive mode for sqlite-backed string filters', async () => {
+    let capturedWhere: unknown;
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            provider: { type: 'sqlite' },
+            ...schema,
+        },
+        getClient: async () => ({
+            User: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedWhere = args?.where;
+                    return [];
+                },
+            },
+            user: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedWhere = args?.where;
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                users(where: { name: { _ilike: "%Ada%" } }) {
+                    id
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(capturedWhere, {
+        name: {
+            contains: 'Ada',
+        },
+    });
+});
