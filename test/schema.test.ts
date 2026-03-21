@@ -30,7 +30,7 @@ test('generates Hasura-style root fields and types', async () => {
     assert.match(printed, /users\(where:/);
     assert.match(printed, /users_by_pk\(id: Int!/);
     assert.match(printed, /users_aggregate\(where:/);
-    assert.match(printed, /insert_users\(objects:/);
+    assert.match(printed, /insert_users\(objects: \[User_insert_input!]!, on_conflict: User_on_conflict\)/);
     assert.match(printed, /insert_users_one\(object: User_insert_input!, on_conflict: User_on_conflict\)/);
     assert.match(printed, /update_users\(where:/);
     assert.match(printed, /delete_users_by_pk\(id: Int!/);
@@ -297,6 +297,53 @@ test('supports nested inserts and insert_one on_conflict upserts', async () => {
     });
     assert.equal(store.users.find((user) => user.id === 2)?.name, 'Benny');
     assert.equal(store.posts.filter((post) => post.authorId === 3).length, 2);
+});
+
+test('supports insert_many on_conflict upserts', async () => {
+    const { client, store } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => client,
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            mutation {
+                insert_users(
+                    objects: [
+                        { id: 2, name: "Benny", age: 21, role: USER }
+                        { id: 3, name: "Cara", age: 25, role: USER }
+                    ]
+                    on_conflict: {
+                        constraint: User_pkey
+                        update_columns: [name, age]
+                    }
+                ) {
+                    affected_rows
+                    returning {
+                        id
+                        name
+                        age
+                        role
+                    }
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        insert_users: {
+            affected_rows: 2,
+            returning: [
+                { id: 2, name: 'Benny', age: 21, role: 'USER' },
+                { id: 3, name: 'Cara', age: 25, role: 'USER' },
+            ],
+        },
+    });
+    assert.equal(store.users.find((user) => user.id === 2)?.name, 'Benny');
+    assert.equal(store.users.find((user) => user.id === 3)?.name, 'Cara');
 });
 
 test('invokes hooks and normalizes auth-like errors', async () => {

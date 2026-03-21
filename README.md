@@ -35,7 +35,7 @@ The generated schema uses Hasura-like defaults:
 
 - Query roots: `users`, `users_by_pk`, `users_aggregate`
 - Mutation roots: `insert_users`, `insert_users_one`, `update_users`, `update_users_by_pk`, `delete_users`, `delete_users_by_pk`
-- `insert_*_one` supports `on_conflict`
+- `insert_*` and `insert_*_one` support `on_conflict`
 - `*_insert_input` supports nested relation `data` inserts
 
 ## Notes

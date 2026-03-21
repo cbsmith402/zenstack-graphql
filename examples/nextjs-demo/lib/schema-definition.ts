@@ -93,6 +93,31 @@ export const sampleOperations = [
         variables: '{}',
     },
     {
+        label: 'Bulk Upsert',
+        description: 'Use insert_many with on_conflict to update existing rows and insert new ones together.',
+        query: `mutation BulkUpsert {
+  insert_users(
+    objects: [
+      { id: 2, name: "Benny", age: 21, role: USER }
+      { id: 9, name: "Drew", age: 28, role: USER }
+    ]
+    on_conflict: {
+      constraint: User_pkey
+      update_columns: [name, age]
+    }
+  ) {
+    affected_rows
+    returning {
+      id
+      name
+      age
+      role
+    }
+  }
+}`,
+        variables: '{}',
+    },
+    {
         label: 'Filtered Search',
         description: 'Use Hasura-style filters against relation data in SQLite.',
         query: `query RelatedFilter {

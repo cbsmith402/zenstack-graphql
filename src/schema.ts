@@ -356,6 +356,13 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                             new GraphQLList(new GraphQLNonNull(this.getInsertInput(model)))
                         ),
                     },
+                    ...(this.features.conflictClauses && this.getConflictConstraints(model).length > 0
+                        ? {
+                              on_conflict: {
+                                  type: this.getOnConflictInput(model),
+                              },
+                          }
+                        : {}),
                 },
                 resolve: this.createResolver(
                     'insertMany',
@@ -2167,9 +2174,20 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     ) {
         const delegate = this.getRequiredDelegate(client, model);
         const object = isPlainObject(args.object) ? args.object : {};
-        const data = this.compileInsertData(model, object);
         const selection = this.buildSelection(model, info.fieldNodes, info);
         const conflict = isPlainObject(args.on_conflict) ? args.on_conflict : undefined;
+
+        return this.createOrUpsertObject(model, delegate, object, selection, conflict);
+    }
+
+    private async createOrUpsertObject(
+        model: NormalizedModelDefinition,
+        delegate: ModelDelegate,
+        object: Record<string, unknown>,
+        selection: Record<string, unknown> | undefined,
+        conflict?: Record<string, unknown>
+    ) {
+        const data = this.compileInsertData(model, object);
 
         if (!conflict) {
             this.assertMethod(delegate, 'create', model);
@@ -2222,6 +2240,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         const objects = Array.isArray(args.objects) ? args.objects : [];
         const returningSelection = this.getReturningSelection(model, info);
         const wantsReturning = Boolean(returningSelection);
+        const conflict = isPlainObject(args.on_conflict) ? args.on_conflict : undefined;
 
         if (objects.length === 0) {
             return { affected_rows: 0, returning: [] };
@@ -2234,12 +2253,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             (entry) => isPlainObject(entry) && this.hasNestedInsertData(model, entry)
         );
 
-        if (!wantsReturning && delegate.createMany && !hasNestedObjects) {
+        if (!conflict && !wantsReturning && delegate.createMany && !hasNestedObjects) {
             const result = await delegate.createMany({ data: compiledObjects });
             return { affected_rows: result.count, returning: [] };
         }
 
-        if (wantsReturning && delegate.createManyAndReturn && !hasNestedObjects) {
+        if (!conflict && wantsReturning && delegate.createManyAndReturn && !hasNestedObjects) {
             const rows = await delegate.createManyAndReturn({
                 data: compiledObjects,
                 select: returningSelection,
@@ -2250,13 +2269,18 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             };
         }
 
-        this.assertMethod(delegate, 'create', model);
         const returning = [];
-        for (const object of compiledObjects) {
-            const created = await delegate.create!({
-                data: object,
-                select: returningSelection,
-            });
+        for (const object of objects) {
+            if (!isPlainObject(object)) {
+                continue;
+            }
+            const created = await this.createOrUpsertObject(
+                model,
+                delegate,
+                object,
+                returningSelection,
+                conflict
+            );
             if (wantsReturning) {
                 returning.push(created);
             }
