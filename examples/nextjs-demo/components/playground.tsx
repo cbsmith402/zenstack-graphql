@@ -130,6 +130,7 @@ export function Playground({
                             <span className="pill">Hasura-style root fields</span>
                             <span className="pill">Nested relation reads</span>
                             <span className="pill">Aggregates + CRUD mutations</span>
+                            <span className="pill">JSON + between filters</span>
                             <span className="pill">Header-based role slicing</span>
                         </div>
                     </div>
@@ -171,6 +172,12 @@ npm run dev`}</pre>
                     <strong>Current SQLite State</strong>
                     <span className="muted">
                         GET <code>/api/state</code>
+                    </span>
+                </div>
+                <div className="meta-box">
+                    <strong>Intentional Gaps</strong>
+                    <span className="muted">
+                        No subscriptions, remote schemas, or cursor pagination in this demo
                     </span>
                 </div>
             </section>

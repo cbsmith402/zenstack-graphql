@@ -1,7 +1,7 @@
 import * as assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { GraphQLString } from 'graphql';
+import { GraphQLError, GraphQLString } from 'graphql';
 
 import {
     createZenStackGraphQLSchema,
@@ -1359,6 +1359,70 @@ test('invokes hooks and normalizes auth-like errors', async () => {
 
     assert.equal(denied.data, null);
     assert.equal(denied.errors?.[0]?.extensions?.code, 'FORBIDDEN');
+});
+
+test('normalizes hook failures and preserves nested error details', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => createInMemoryClient().client,
+        hooks: {
+            beforeResolve() {
+                throw Object.assign(new Error('outer failure'), {
+                    cause: Object.assign(new Error('invalid filter payload'), {
+                        name: 'ZenStackValidationError',
+                        code: 'SQLITE_VALIDATION',
+                        details: { field: 'where.age' },
+                    }),
+                });
+            },
+            async formatError(error) {
+                return new GraphQLError(error.message, {
+                    extensions: {
+                        ...error.extensions,
+                        formattedByHook: true,
+                    },
+                });
+            },
+        },
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: '{ users { id } }',
+    });
+
+    assert.equal(result.data, null);
+    assert.equal(result.errors?.[0]?.extensions?.code, 'BAD_USER_INPUT');
+    assert.equal(result.errors?.[0]?.extensions?.originalCode, 'SQLITE_VALIDATION');
+    assert.deepEqual(result.errors?.[0]?.extensions?.details, { field: 'where.age' });
+    assert.equal(result.errors?.[0]?.extensions?.formattedByHook, true);
+});
+
+test('normalizes manual extension resolver failures with the shared resolver path', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => createInMemoryClient().client,
+        extensions: {
+            query: {
+                explode: {
+                    type: GraphQLString,
+                    resolve() {
+                        throw Object.assign(new Error('not allowed'), {
+                            name: 'UnauthorizedError',
+                        });
+                    },
+                },
+            },
+        },
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: '{ explode }',
+    });
+
+    assert.deepEqual(toPlain(result.data), { explode: null });
+    assert.equal(result.errors?.[0]?.extensions?.code, 'FORBIDDEN');
 });
 
 test('omits insensitive mode for sqlite-backed string filters', async () => {

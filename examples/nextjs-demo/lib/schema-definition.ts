@@ -201,6 +201,22 @@ export const sampleOperations = [
         variables: '{}',
     },
     {
+        label: 'Between Filter',
+        description:
+            'Use the ORM-backed _between operator for comparable scalar fields in a Hasura-style where clause.',
+        query: `query BetweenFilter {
+  users(
+    where: { age: { _between: [20, 40] } }
+    order_by: [{ age: asc }]
+  ) {
+    id
+    name
+    age
+  }
+}`,
+        variables: '{}',
+    },
+    {
         label: 'Procedure Root',
         description:
             'Call a real ZenStack custom procedure defined in ZModel and exposed as a GraphQL query root.',

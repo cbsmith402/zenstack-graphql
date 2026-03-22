@@ -220,7 +220,9 @@ export interface ResolverInvocation<TContext = unknown> {
         | 'deleteByPk'
         | 'relation'
         | 'procedureQuery'
-        | 'procedureMutation';
+        | 'procedureMutation'
+        | 'extensionQuery'
+        | 'extensionMutation';
     model?: NormalizedModelDefinition;
     fieldName: string;
     args: Record<string, unknown>;

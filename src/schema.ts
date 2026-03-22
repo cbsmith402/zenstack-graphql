@@ -875,12 +875,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             target[fieldName] = {
                 ...rest,
                 resolve: resolve
-                    ? async (source, args, context, info) => {
-                          const client =
-                              getExecutionClient<TClient>() ??
-                              ((await this.options.getClient(context)) as TClient);
-                          return resolve(source, args, context, info, { client });
-                      }
+                    ? this.createResolver(
+                          rootKind === 'query' ? 'extensionQuery' : 'extensionMutation',
+                          undefined,
+                          async ({ client, args, context, info }) =>
+                              resolve(undefined, args, context, info, { client })
+                      )
                     : undefined,
             };
         }
@@ -2051,9 +2051,8 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 info,
             };
 
-            await this.options.hooks?.beforeResolve?.(invocation);
-
             try {
+                await this.options.hooks?.beforeResolve?.(invocation);
                 const client =
                     getExecutionClient<TClient>() ??
                     ((await this.options.getClient(context)) as TClient);

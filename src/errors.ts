@@ -6,23 +6,29 @@ const NOT_FOUND_NAMES = new Set(['NotFoundError', 'ZenStackNotFoundError']);
 
 export function normalizeError(error: unknown): GraphQLError {
     if (error instanceof GraphQLError) {
-        return error;
+        if (error.extensions?.code) {
+            return error;
+        }
+
+        const candidate = getErrorCandidate(error.originalError ?? error);
+        return new GraphQLError(error.message, {
+            nodes: error.nodes,
+            source: error.source,
+            positions: error.positions,
+            path: error.path,
+            originalError: error.originalError ?? error,
+            extensions: {
+                ...error.extensions,
+                ...getErrorExtensions(candidate),
+            },
+        });
     }
 
-    const candidate = error as { name?: string; message?: string; code?: string; details?: unknown };
+    const candidate = getErrorCandidate(error);
     const message = candidate?.message ?? 'Unexpected GraphQL adapter failure';
-    const code = getErrorCode(candidate);
-    const extensions: Record<string, unknown> = { code };
-
-    if (candidate?.details !== undefined) {
-        extensions.details = candidate.details;
-    }
-
-    if (candidate?.code && typeof candidate.code === 'string') {
-        extensions.originalCode = candidate.code;
-    }
-
-    return new GraphQLError(message, { extensions });
+    return new GraphQLError(message, {
+        extensions: getErrorExtensions(candidate),
+    });
 }
 
 function getErrorCode(error: { name?: string; code?: string; message?: string } | undefined) {
@@ -47,4 +53,54 @@ function getErrorCode(error: { name?: string; code?: string; message?: string } 
     }
 
     return 'INTERNAL_SERVER_ERROR';
+}
+
+function getErrorExtensions(error: {
+    name?: string;
+    code?: string;
+    message?: string;
+    details?: unknown;
+}) {
+    const extensions: Record<string, unknown> = {
+        code: getErrorCode(error),
+    };
+
+    if (error?.details !== undefined) {
+        extensions.details = error.details;
+    }
+
+    if (error?.code && typeof error.code === 'string') {
+        extensions.originalCode = error.code;
+    }
+
+    return extensions;
+}
+
+function getErrorCandidate(error: unknown, depth = 0): {
+    name?: string;
+    code?: string;
+    message?: string;
+    details?: unknown;
+} {
+    const candidate = (error ?? {}) as {
+        name?: string;
+        code?: string;
+        message?: string;
+        details?: unknown;
+        cause?: unknown;
+    };
+
+    if (depth >= 3 || !candidate.cause) {
+        return candidate;
+    }
+
+    const cause = getErrorCandidate(candidate.cause, depth + 1);
+    const preferredName =
+        !candidate.name || candidate.name === 'Error' ? cause.name : candidate.name;
+    return {
+        name: preferredName,
+        code: candidate.code ?? cause.code,
+        message: candidate.message ?? cause.message,
+        details: candidate.details ?? cause.details,
+    };
 }
