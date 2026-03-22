@@ -25,6 +25,7 @@ type QueryArgs = {
     where?: Record<string, unknown>;
     orderBy?: Record<string, unknown> | Record<string, unknown>[];
     distinct?: string[];
+    cursor?: Record<string, unknown>;
     take?: number;
     skip?: number;
     select?: Record<string, unknown>;
@@ -209,6 +210,36 @@ function applyDistinct<T extends Record<string, unknown>>(records: T[], distinct
     return result;
 }
 
+function applyPagination<T extends Record<string, unknown>>(records: T[], args: QueryArgs = {}) {
+    const skip = typeof args.skip === 'number' ? args.skip : 0;
+    const take = typeof args.take === 'number' ? args.take : undefined;
+    const cursor = isRecord(args.cursor) ? args.cursor : undefined;
+    const cursorIndex = cursor
+        ? records.findIndex((record) =>
+              Object.entries(cursor).every(([field, value]) => record[field] === value)
+          )
+        : -1;
+
+    if (cursor && cursorIndex === -1) {
+        return [];
+    }
+
+    if (take === undefined) {
+        const start = cursorIndex >= 0 ? cursorIndex + skip : skip;
+        return records.slice(start);
+    }
+
+    if (take >= 0) {
+        const start = cursorIndex >= 0 ? cursorIndex + skip : skip;
+        return records.slice(start, start + take);
+    }
+
+    const inclusiveEnd = cursorIndex >= 0 ? cursorIndex + 1 : records.length;
+    const end = Math.max(0, inclusiveEnd - skip);
+    const start = Math.max(0, end + take);
+    return records.slice(start, end).reverse();
+}
+
 function sortRecords<T extends Record<string, unknown>>(
     store: DataStore,
     modelName: ModelName,
@@ -226,8 +257,8 @@ function sortRecords<T extends Record<string, unknown>>(
             for (const [field, direction] of Object.entries(clause)) {
                 if (isRecord(direction) && (direction._count === 'asc' || direction._count === 'desc')) {
                     if (modelName === 'User' && field === 'posts') {
-                        const leftCount = getUserPosts(store, left as UserRecord).length;
-                        const rightCount = getUserPosts(store, right as UserRecord).length;
+                        const leftCount = getUserPosts(store, left as unknown as UserRecord).length;
+                        const rightCount = getUserPosts(store, right as unknown as UserRecord).length;
                         const comparison = compareValues(leftCount, rightCount);
                         if (comparison !== 0) {
                             return direction._count === 'desc' ? -comparison : comparison;
@@ -336,13 +367,22 @@ function recordMatches(
                 return false;
             }
             const posts = getUserPosts(store, record as UserRecord);
-            if (isRecord(value.some) && !posts.some((post) => recordMatches(store, 'Post', post, value.some))) {
+            if (
+                isRecord(value.some) &&
+                !posts.some((post) => recordMatches(store, 'Post', post, value.some as Record<string, unknown>))
+            ) {
                 return false;
             }
-            if (isRecord(value.every) && !posts.every((post) => recordMatches(store, 'Post', post, value.every))) {
+            if (
+                isRecord(value.every) &&
+                !posts.every((post) => recordMatches(store, 'Post', post, value.every as Record<string, unknown>))
+            ) {
                 return false;
             }
-            if (isRecord(value.none) && posts.some((post) => recordMatches(store, 'Post', post, value.none))) {
+            if (
+                isRecord(value.none) &&
+                posts.some((post) => recordMatches(store, 'Post', post, value.none as Record<string, unknown>))
+            ) {
                 return false;
             }
             continue;
@@ -420,21 +460,20 @@ function applySelect(
 
         if (modelName === 'User' && key === 'posts' && isRecord(value)) {
             const relationArgs = value as QueryArgs;
-            const posts = applyDistinct(
-                sortRecords(
-                    store,
-                    'Post',
-                    getUserPosts(store, record as UserRecord).filter((post) =>
-                        recordMatches(store, 'Post', post, relationArgs.where)
+            const posts = applyPagination(
+                applyDistinct(
+                    sortRecords(
+                        store,
+                        'Post',
+                        getUserPosts(store, record as UserRecord).filter((post) =>
+                            recordMatches(store, 'Post', post, relationArgs.where)
+                        ),
+                        relationArgs.orderBy
                     ),
-                    relationArgs.orderBy
+                    relationArgs.distinct
                 ),
-                relationArgs.distinct
+                relationArgs
             )
-                .slice(
-                    relationArgs.skip ?? 0,
-                    relationArgs.take ? (relationArgs.skip ?? 0) + relationArgs.take : undefined
-                )
                 .map((post) => applySelect(store, 'Post', post, relationArgs.select));
             result[key] = posts;
             continue;
@@ -496,16 +535,18 @@ function matchesUnique<T extends Record<string, unknown>>(record: T, where?: Rec
 function createUserDelegate(store: DataStore) {
     return {
         async findMany(args: QueryArgs = {}) {
-            return applyDistinct(
-                sortRecords(
-                    store,
-                    'User',
-                    store.users.filter((record) => recordMatches(store, 'User', record, args.where)),
-                    args.orderBy
+            return applyPagination(
+                applyDistinct(
+                    sortRecords(
+                        store,
+                        'User',
+                        store.users.filter((record) => recordMatches(store, 'User', record, args.where)),
+                        args.orderBy
+                    ),
+                    args.distinct
                 ),
-                args.distinct
+                args
             )
-                .slice(args.skip ?? 0, args.take ? (args.skip ?? 0) + args.take : undefined)
                 .map((record) => applySelect(store, 'User', record, args.select));
         },
         async findUnique(args: QueryArgs = {}) {
@@ -517,6 +558,9 @@ function createUserDelegate(store: DataStore) {
                 store.users.filter((record) => recordMatches(store, 'User', record, args.where)),
                 args
             );
+        },
+        async count(args: QueryArgs = {}) {
+            return store.users.filter((record) => recordMatches(store, 'User', record, args.where)).length;
         },
         async create(args: QueryArgs = {}) {
             const data = isRecord(args.data) ? args.data : {};
@@ -662,16 +706,18 @@ function createUserDelegate(store: DataStore) {
 function createPostDelegate(store: DataStore) {
     return {
         async findMany(args: QueryArgs = {}) {
-            return applyDistinct(
-                sortRecords(
-                    store,
-                    'Post',
-                    store.posts.filter((record) => recordMatches(store, 'Post', record, args.where)),
-                    args.orderBy
+            return applyPagination(
+                applyDistinct(
+                    sortRecords(
+                        store,
+                        'Post',
+                        store.posts.filter((record) => recordMatches(store, 'Post', record, args.where)),
+                        args.orderBy
+                    ),
+                    args.distinct
                 ),
-                args.distinct
+                args
             )
-                .slice(args.skip ?? 0, args.take ? (args.skip ?? 0) + args.take : undefined)
                 .map((record) => applySelect(store, 'Post', record, args.select));
         },
         async findUnique(args: QueryArgs = {}) {
@@ -683,6 +729,9 @@ function createPostDelegate(store: DataStore) {
                 store.posts.filter((record) => recordMatches(store, 'Post', record, args.where)),
                 args
             );
+        },
+        async count(args: QueryArgs = {}) {
+            return store.posts.filter((record) => recordMatches(store, 'Post', record, args.where)).length;
         },
         async create(args: QueryArgs = {}) {
             const data = isRecord(args.data) ? args.data : {};

@@ -251,6 +251,10 @@ export interface FeatureFlags {
     exposeInternalFields?: boolean;
 }
 
+export interface RelayOptions {
+    enabled?: boolean;
+}
+
 export type SchemaFilterKind =
     | 'Equality'
     | 'Range'
@@ -335,6 +339,7 @@ export interface CreateZenStackGraphQLSchemaOptions<TClient = unknown, TContext 
     getClient(context: TContext): TClient | Promise<TClient>;
     naming?: NamingConfig;
     features?: FeatureFlags;
+    relay?: RelayOptions;
     slicing?: SchemaSlicingConfig;
     scalars?: Partial<Record<ScalarType, GraphQLScalarType>>;
     hooks?: ResolverHooks<TContext>;
@@ -344,6 +349,7 @@ export interface CreateZenStackGraphQLSchemaOptions<TClient = unknown, TContext 
 export interface ModelDelegate {
     findMany?(args?: Record<string, unknown>): Promise<unknown[]>;
     findUnique?(args: Record<string, unknown>): Promise<unknown | null>;
+    count?(args?: Record<string, unknown>): Promise<number>;
     aggregate?(args?: Record<string, unknown>): Promise<Record<string, unknown>>;
     create?(args: Record<string, unknown>): Promise<unknown>;
     createMany?(args: Record<string, unknown>): Promise<{ count: number }>;

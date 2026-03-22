@@ -47,6 +47,211 @@ test('generates Hasura-style root fields and types', async () => {
     assert.match(printed, /_nicontains: String/);
 });
 
+test('generates Relay types only when enabled', async () => {
+    const { client } = createInMemoryClient();
+    const disabledSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => client,
+    });
+    const disabledPrinted = printSchema(disabledSchema);
+    assert.doesNotMatch(disabledPrinted, /users_connection/);
+    assert.doesNotMatch(disabledPrinted, /type UserNode/);
+    assert.doesNotMatch(disabledPrinted, /interface Node/);
+
+    const enabledSchema = createZenStackGraphQLSchema({
+        schema,
+        relay: { enabled: true },
+        getClient: async () => client,
+    });
+    const enabledPrinted = printSchema(enabledSchema);
+    assert.match(enabledPrinted, /users_connection/);
+    assert.match(enabledPrinted, /posts_connection/);
+    assert.match(enabledPrinted, /type UserNode implements Node/);
+    assert.match(enabledPrinted, /type UserConnection/);
+    assert.match(enabledPrinted, /interface Node/);
+});
+
+test('executes Relay root and nested connections without changing existing list roots', async () => {
+    const { client } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        relay: { enabled: true },
+        getClient: async () => client,
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                users(order_by: [{ id: asc }]) {
+                    id
+                    name
+                }
+                users_connection(first: 1, order_by: [{ id: asc }]) {
+                    totalCount
+                    nodes {
+                        id
+                        name
+                        age
+                        posts_connection(first: 1, order_by: [{ views: desc }]) {
+                            totalCount
+                            nodes {
+                                id
+                                title
+                                views
+                            }
+                            pageInfo {
+                                hasNextPage
+                                hasPreviousPage
+                            }
+                        }
+                    }
+                    edges {
+                        cursor
+                        node {
+                            id
+                            name
+                        }
+                    }
+                    pageInfo {
+                        hasNextPage
+                        hasPreviousPage
+                        startCursor
+                        endCursor
+                    }
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    const data = toPlain(result.data) as Record<string, any>;
+    assert.deepEqual(data.users, [
+        { id: 1, name: 'Ada' },
+        { id: 2, name: 'Ben' },
+    ]);
+    assert.equal(data.users_connection.totalCount, 2);
+    assert.equal(data.users_connection.nodes[0].name, 'Ada');
+    assert.equal(typeof data.users_connection.nodes[0].id, 'string');
+    assert.equal(data.users_connection.nodes[0].posts_connection.totalCount, 2);
+    assert.equal(data.users_connection.nodes[0].posts_connection.nodes[0].title, 'Hasura Notes');
+    assert.equal(data.users_connection.nodes[0].posts_connection.pageInfo.hasNextPage, true);
+    assert.equal(data.users_connection.nodes[0].posts_connection.pageInfo.hasPreviousPage, false);
+    assert.equal(data.users_connection.pageInfo.hasNextPage, true);
+    assert.equal(data.users_connection.pageInfo.hasPreviousPage, false);
+    assert.equal(typeof data.users_connection.pageInfo.startCursor, 'string');
+    assert.equal(typeof data.users_connection.edges[0].cursor, 'string');
+});
+
+test('supports Relay backward pagination and node lookup', async () => {
+    const { client } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        relay: { enabled: true },
+        getClient: async () => client,
+    });
+
+    const page = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                users_connection(last: 1, order_by: [{ id: asc }]) {
+                    nodes {
+                        id
+                        name
+                    }
+                    pageInfo {
+                        hasNextPage
+                        hasPreviousPage
+                    }
+                }
+            }
+        `,
+    });
+
+    assert.equal(page.errors, undefined);
+    const pageData = toPlain(page.data) as Record<string, any>;
+    assert.deepEqual(
+        pageData.users_connection.nodes.map((entry: { name: string }) => entry.name),
+        ['Ben']
+    );
+    assert.equal(pageData.users_connection.pageInfo.hasNextPage, false);
+    assert.equal(pageData.users_connection.pageInfo.hasPreviousPage, true);
+
+    const nodeId = pageData.users_connection.nodes[0].id;
+    const lookup = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query ($id: ID!) {
+                node(id: $id) {
+                    ... on UserNode {
+                        id
+                        name
+                        age
+                    }
+                }
+            }
+        `,
+        variableValues: { id: nodeId },
+    });
+
+    assert.equal(lookup.errors, undefined);
+    assert.deepEqual(toPlain(lookup.data), {
+        node: {
+            id: nodeId,
+            name: 'Ben',
+            age: 19,
+        },
+    });
+});
+
+test('rejects invalid Relay cursors and hides pruned models from node lookups', async () => {
+    const { client } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        relay: { enabled: true },
+        slicing: {
+            excludedModels: ['Post'],
+        },
+        getClient: async () => client,
+    });
+
+    const badCursor = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                users_connection(first: 1, after: "bad-cursor") {
+                    nodes {
+                        id
+                    }
+                }
+            }
+        `,
+    });
+
+    assert.equal(badCursor.data, null);
+    assert.equal(badCursor.errors?.[0]?.extensions?.code, 'BAD_USER_INPUT');
+
+    const postNodeId = Buffer.from(
+        JSON.stringify({ v: 1, model: 'Post', pk: { id: 10 } }),
+        'utf8'
+    ).toString('base64url');
+    const hidden = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query ($id: ID!) {
+                node(id: $id) {
+                    id
+                }
+            }
+        `,
+        variableValues: { id: postNodeId },
+    });
+
+    assert.equal(hidden.errors, undefined);
+    assert.deepEqual(toPlain(hidden.data), { node: null });
+});
+
 test('supports computed fields from generated zenstack metadata when enabled', async () => {
     let capturedArgs: Record<string, unknown> | undefined;
     const generatedSchemaLike = {
@@ -1658,6 +1863,67 @@ test('wraps an entire mutation operation in one interactive transaction', async 
         update_users_by_pk: {
             id: 9,
             name: 'Tessa',
+        },
+    });
+});
+
+test('preserves the client binding when invoking $transaction', async () => {
+    let transactionCalls = 0;
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => {
+            const txClient = {
+                User: {
+                    async create() {
+                        return { id: 7, name: 'Bound Tess' };
+                    },
+                },
+                user: {
+                    async create() {
+                        return { id: 7, name: 'Bound Tess' };
+                    },
+                },
+            } as TransactionTestClient;
+
+            const client = {
+                interactiveTransaction: async <T,>(
+                    callback: (tx: TransactionTestClient) => Promise<T>
+                ) => callback(txClient),
+                $transaction<T>(input: Promise<T>[] | ((tx: TransactionTestClient) => Promise<T>)) {
+                    if (Array.isArray(input)) {
+                        return Promise.all(input);
+                    }
+                    transactionCalls += 1;
+                    return this.interactiveTransaction(input);
+                },
+            } as TransactionTestClient & {
+                interactiveTransaction: <T>(
+                    callback: (tx: TransactionTestClient) => Promise<T>
+                ) => Promise<T>;
+            };
+
+            return client;
+        },
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            mutation {
+                insert_users_one(object: { id: 7, name: "Bound Tess", age: 27, role: USER }) {
+                    id
+                    name
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.equal(transactionCalls, 1);
+    assert.deepEqual(toPlain(result.data), {
+        insert_users_one: {
+            id: 7,
+            name: 'Bound Tess',
         },
     });
 });

@@ -1,21 +1,23 @@
 import {
     GraphQLBoolean,
     GraphQLEnumType,
+    GraphQLFieldResolver,
+    GraphQLID,
     GraphQLInputObjectType,
     GraphQLInputType,
     GraphQLInt,
+    GraphQLInterfaceType,
     GraphQLList,
     GraphQLNonNull,
     GraphQLObjectType,
     GraphQLOutputType,
     GraphQLSchema,
     GraphQLString,
-    GraphQLFieldResolver,
     valueFromASTUntyped,
     type FieldNode,
     type GraphQLFieldConfig,
-    type GraphQLFieldConfigMap,
     type GraphQLFieldConfigArgumentMap,
+    type GraphQLFieldConfigMap,
     type GraphQLInputFieldConfigMap,
     type GraphQLResolveInfo,
     type SelectionNode,
@@ -183,6 +185,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
+function stableSerialize(value: unknown): string {
+    if (Array.isArray(value)) {
+        return `[${value.map((entry) => stableSerialize(entry)).join(',')}]`;
+    }
+    if (value && typeof value === 'object') {
+        return `{${Object.entries(value as Record<string, unknown>)
+            .sort(([left], [right]) => left.localeCompare(right))
+            .map(([key, entry]) => `${JSON.stringify(key)}:${stableSerialize(entry)}`)
+            .join(',')}}`;
+    }
+    return JSON.stringify(value);
+}
+
+function encodeOpaquePayload(payload: RelayCursorPayload | RelayNodeIdPayload) {
+    return Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+}
+
+function decodeOpaquePayload(value: string) {
+    return JSON.parse(Buffer.from(value, 'base64url').toString('utf8')) as unknown;
+}
+
 function normalizeOrderDirection(direction: OrderByDirection) {
     return direction.startsWith('desc') ? 'desc' : 'asc';
 }
@@ -267,6 +290,51 @@ type AggregateCountRequest = {
     distinct?: boolean;
 };
 
+type RelayDirection = 'forward' | 'backward';
+
+type RelayConnectionArgs = {
+    where?: Record<string, unknown>;
+    order_by?: unknown;
+    first?: number;
+    after?: string;
+    last?: number;
+    before?: string;
+};
+
+type RelayCursorPayload = {
+    v: 1;
+    model: string;
+    pk: Record<string, unknown>;
+    order: unknown[];
+};
+
+type RelayNodeIdPayload = {
+    v: 1;
+    model: string;
+    pk: Record<string, unknown>;
+};
+
+type RelayPageInfo = {
+    hasNextPage: boolean;
+    hasPreviousPage: boolean;
+    startCursor: string | null;
+    endCursor: string | null;
+};
+
+type RelayConnectionResult = {
+    nodes: Record<string, unknown>[];
+    edges: Array<{ cursor: string; node: Record<string, unknown> }>;
+    pageInfo: RelayPageInfo;
+    totalCount: number;
+};
+
+type RelayQueryShape = {
+    cursor?: Record<string, unknown>;
+    skip?: number;
+    take: number;
+    direction: RelayDirection;
+};
+
 type RootCrudOperation =
     | 'queryMany'
     | 'queryByPk'
@@ -297,7 +365,11 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly naming: NamingStrategy;
     private readonly slicing: SchemaSlicingConfig | undefined;
     private readonly providerCapabilities: ProviderCapabilities;
+    private readonly relayEnabled: boolean;
     private readonly objectTypes = new Map<string, GraphQLObjectType>();
+    private readonly relayObjectTypes = new Map<string, GraphQLObjectType>();
+    private readonly relayEdgeTypes = new Map<string, GraphQLObjectType>();
+    private readonly relayConnectionTypes = new Map<string, GraphQLObjectType>();
     private readonly typeDefObjectTypes = new Map<string, GraphQLObjectType>();
     private readonly enumTypes = new Map<string, GraphQLEnumType>();
     private readonly typeDefInputTypes = new Map<string, GraphQLInputObjectType>();
@@ -323,6 +395,8 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly aggregateTypes = new Map<string, GraphQLObjectType>();
     private readonly aggregateFieldsTypes = new Map<string, GraphQLObjectType>();
     private readonly aggregateLeafTypes = new Map<string, GraphQLObjectType>();
+    private nodeInterfaceType: GraphQLInterfaceType | undefined;
+    private pageInfoType: GraphQLObjectType | undefined;
 
     constructor(private readonly options: CreateZenStackGraphQLSchemaOptions<TClient, TContext>) {
         this.normalizedSchema = normalizeSchema(options.schema);
@@ -330,6 +404,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         this.naming = resolveNamingStrategy(options.naming);
         this.slicing = options.slicing;
         this.providerCapabilities = getProviderCapabilities(this.normalizedSchema);
+        this.relayEnabled = options.relay?.enabled === true;
     }
 
     private supportsInsensitiveMode() {
@@ -598,6 +673,24 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                         return delegate.findMany!(queryArgs);
                     }),
                 };
+
+                if (this.relayEnabled && getPrimaryKeyFields(model).length > 0) {
+                    queryFields[`${this.naming.queryMany(model)}_connection`] = {
+                        type: new GraphQLNonNull(this.getRelayConnectionType(model)),
+                        description: `Relay connection for ${model.name} records`,
+                        args: this.getRelayConnectionArgs(model),
+                        resolve: this.createResolver(
+                            'query',
+                            model,
+                            async ({ client, args }) =>
+                                this.resolveRelayRootConnection(
+                                    model,
+                                    client,
+                                    args as RelayConnectionArgs
+                                )
+                        ),
+                    };
+                }
             }
 
             if (getPrimaryKeyFields(model).length > 0 && this.isOperationEnabled(model, 'queryByPk')) {
@@ -751,6 +844,32 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             }
         }
 
+        if (this.relayEnabled) {
+            const nodeModels = this.normalizedSchema.models.filter(
+                (model) =>
+                    this.isModelIncluded(model) && getPrimaryKeyFields(model).length > 0
+            );
+            if (nodeModels.length > 0) {
+                if (queryFields.node) {
+                    throw new Error('Duplicate query root field "node"');
+                }
+                queryFields.node = {
+                    type: this.getRelayNodeInterface(),
+                    args: {
+                        id: {
+                            type: new GraphQLNonNull(GraphQLID),
+                        },
+                    },
+                    resolve: this.createResolver(
+                        'query',
+                        undefined,
+                        async ({ client, args }) =>
+                            this.resolveRelayNode(client, String(args.id))
+                    ),
+                };
+            }
+        }
+
         for (const procedure of this.normalizedSchema.procedures) {
             if (!this.isProcedureIncluded(procedure)) {
                 continue;
@@ -783,6 +902,15 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                           fields: () => mutationFields,
                       })
                     : undefined,
+            types: this.relayEnabled
+                ? this.normalizedSchema.models
+                      .filter(
+                          (model) =>
+                              this.isModelIncluded(model) &&
+                              getPrimaryKeyFields(model).length > 0
+                      )
+                      .map((model) => this.getRelayObjectType(model))
+                : undefined,
         });
 
         registerExecutionMetadata(schema, {
@@ -1796,6 +1924,188 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         );
     }
 
+    private getRelayConnectionArgs(model: NormalizedModelDefinition): GraphQLFieldConfigArgumentMap {
+        return {
+            where: { type: this.getWhereInput(model) },
+            order_by: { type: new GraphQLList(this.getOrderByInput(model)) },
+            first: { type: GraphQLInt },
+            after: { type: GraphQLString },
+            last: { type: GraphQLInt },
+            before: { type: GraphQLString },
+        };
+    }
+
+    private getRelayNodeInterface() {
+        if (this.nodeInterfaceType) {
+            return this.nodeInterfaceType;
+        }
+
+        this.nodeInterfaceType = new GraphQLInterfaceType({
+            name: 'Node',
+            fields: () => ({
+                id: {
+                    type: new GraphQLNonNull(GraphQLID),
+                },
+            }),
+            resolveType: (value) => {
+                if (isPlainObject(value) && typeof value.__relayTypeName === 'string') {
+                    return value.__relayTypeName;
+                }
+                return undefined;
+            },
+        });
+
+        return this.nodeInterfaceType;
+    }
+
+    private getPageInfoType() {
+        if (this.pageInfoType) {
+            return this.pageInfoType;
+        }
+
+        this.pageInfoType = new GraphQLObjectType({
+            name: 'PageInfo',
+            fields: () => ({
+                hasNextPage: { type: new GraphQLNonNull(GraphQLBoolean) },
+                hasPreviousPage: { type: new GraphQLNonNull(GraphQLBoolean) },
+                startCursor: { type: GraphQLString },
+                endCursor: { type: GraphQLString },
+            }),
+        });
+
+        return this.pageInfoType;
+    }
+
+    private getRelayFieldOutputType(field: NormalizedFieldDefinition): GraphQLOutputType {
+        if (field.kind === 'relation') {
+            return maybeWrapList(
+                this.getRelayObjectType(this.getModel(field.type)),
+                field.isList,
+                field.isNullable
+            ) as GraphQLOutputType;
+        }
+
+        return this.getFieldOutputType(field);
+    }
+
+    private getRelayDefaultSelection(model: NormalizedModelDefinition) {
+        const fields = this.getVisibleFields(model).filter(
+            (field) => field.kind !== 'relation'
+        );
+
+        const selection = Object.fromEntries(fields.map((field) => [field.name, true]));
+        return this.mergeSelections(selection, this.getIdentitySelection(model));
+    }
+
+    private getRelayObjectType(model: NormalizedModelDefinition) {
+        const existing = this.relayObjectTypes.get(model.name);
+        if (existing) {
+            return existing;
+        }
+
+        const objectType = new GraphQLObjectType({
+            name: `${this.naming.typeName(model.name)}Node`,
+            description: model.description,
+            interfaces: () => [this.getRelayNodeInterface()],
+            fields: () => {
+                const fields: GraphQLFieldConfigMap<Record<string, unknown>, TContext> = {
+                    id: {
+                        type: new GraphQLNonNull(GraphQLID),
+                        resolve: (source) => this.encodeRelayNodeId(model, source),
+                    },
+                };
+
+                for (const field of this.getVisibleFields(model)) {
+                    if (field.name === 'id') {
+                        continue;
+                    }
+
+                    if (field.kind === 'relation') {
+                        if (field.isList) {
+                            fields[`${field.name}_connection`] = {
+                                type: new GraphQLNonNull(
+                                    this.getRelayConnectionType(this.getModel(field.type))
+                                ),
+                                args: this.getRelayConnectionArgs(this.getModel(field.type)),
+                                resolve: this.createRelayRelationConnectionResolver(model, field),
+                            };
+                            continue;
+                        }
+
+                        fields[field.name] = {
+                            type: this.getRelayFieldOutputType(field),
+                            description: field.description,
+                            resolve: this.createRelayRelationResolver(model, field),
+                        };
+                        continue;
+                    }
+
+                    fields[field.name] = {
+                        type: this.getRelayFieldOutputType(field),
+                        description: field.description,
+                    };
+                }
+
+                return fields;
+            },
+        });
+
+        this.relayObjectTypes.set(model.name, objectType);
+        return objectType;
+    }
+
+    private getRelayEdgeType(model: NormalizedModelDefinition) {
+        const existing = this.relayEdgeTypes.get(model.name);
+        if (existing) {
+            return existing;
+        }
+
+        const edgeType = new GraphQLObjectType({
+            name: `${this.naming.typeName(model.name)}Edge`,
+            fields: () => ({
+                cursor: { type: new GraphQLNonNull(GraphQLString) },
+                node: {
+                    type: new GraphQLNonNull(this.getRelayObjectType(model)),
+                },
+            }),
+        });
+
+        this.relayEdgeTypes.set(model.name, edgeType);
+        return edgeType;
+    }
+
+    private getRelayConnectionType(model: NormalizedModelDefinition) {
+        const existing = this.relayConnectionTypes.get(model.name);
+        if (existing) {
+            return existing;
+        }
+
+        const connectionType = new GraphQLObjectType({
+            name: `${this.naming.typeName(model.name)}Connection`,
+            fields: () => ({
+                edges: {
+                    type: new GraphQLNonNull(
+                        new GraphQLList(new GraphQLNonNull(this.getRelayEdgeType(model)))
+                    ),
+                },
+                nodes: {
+                    type: new GraphQLNonNull(
+                        new GraphQLList(new GraphQLNonNull(this.getRelayObjectType(model)))
+                    ),
+                },
+                pageInfo: {
+                    type: new GraphQLNonNull(this.getPageInfoType()),
+                },
+                totalCount: {
+                    type: GraphQLInt,
+                },
+            }),
+        });
+
+        this.relayConnectionTypes.set(model.name, connectionType);
+        return connectionType;
+    }
+
     private getModelObjectType(model: NormalizedModelDefinition) {
         const existing = this.objectTypes.get(model.name);
         if (existing) {
@@ -2159,6 +2469,120 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         };
     }
 
+    private createRelayRelationResolver(
+        model: NormalizedModelDefinition,
+        relationField: NormalizedFieldDefinition
+    ): GraphQLFieldResolver<Record<string, unknown>, TContext, Record<string, unknown> | null> {
+        const relatedModel = this.getModel(relationField.type);
+        return async (source, _args, context) => {
+            const preloaded = source[relationField.name];
+            if (isPlainObject(preloaded)) {
+                return this.wrapRelayRecord(relatedModel, preloaded);
+            }
+            if (preloaded === null) {
+                return null;
+            }
+
+            const parentWhere = this.buildUniqueWhereFromRecord(model, source);
+            if (!parentWhere) {
+                return null;
+            }
+
+            const client =
+                getExecutionClient<TClient>() ??
+                ((await this.options.getClient(context)) as TClient);
+            const delegate = this.getRequiredDelegate(client, model);
+            if (!delegate.findUnique) {
+                return null;
+            }
+
+            const result = (await delegate.findUnique({
+                where: parentWhere,
+                select: {
+                    [relationField.name]: {
+                        select: this.getRelayDefaultSelection(relatedModel),
+                    },
+                },
+            })) as Record<string, unknown> | null;
+
+            const related = result?.[relationField.name];
+            return isPlainObject(related) ? this.wrapRelayRecord(relatedModel, related) : null;
+        };
+    }
+
+    private createRelayRelationConnectionResolver(
+        model: NormalizedModelDefinition,
+        relationField: NormalizedFieldDefinition
+    ): GraphQLFieldResolver<Record<string, unknown>, TContext, RelayConnectionArgs> {
+        const relatedModel = this.getModel(relationField.type);
+        return async (source, args, context) => {
+            const parentWhere = this.buildUniqueWhereFromRecord(model, source);
+            if (!parentWhere) {
+                return this.emptyRelayConnection();
+            }
+
+            const client =
+                getExecutionClient<TClient>() ??
+                ((await this.options.getClient(context)) as TClient);
+            const delegate = this.getRequiredDelegate(client, model);
+            if (!delegate.findUnique) {
+                return this.emptyRelayConnection();
+            }
+
+            const relayArgs = args as RelayConnectionArgs;
+            const query = this.compileRelayQueryShape(relatedModel, relayArgs);
+            const orderBy = this.getRelayEffectiveOrderBy(relatedModel, relayArgs.order_by);
+            const where = this.toWhere(relatedModel, relayArgs.where);
+            const select = this.getRelayDefaultSelection(relatedModel);
+
+            const primaryResult = (await delegate.findUnique({
+                where: parentWhere,
+                select: {
+                    [relationField.name]: {
+                        where,
+                        orderBy,
+                        cursor: query.cursor,
+                        skip: query.skip,
+                        take: query.take,
+                        select,
+                    },
+                },
+            })) as Record<string, unknown> | null;
+
+            const rawRows = Array.isArray(primaryResult?.[relationField.name])
+                ? (primaryResult?.[relationField.name] as Record<string, unknown>[])
+                : [];
+            const page = this.finalizeRelayRows(relatedModel, rawRows, query);
+            const countRows = (await delegate.findUnique({
+                where: parentWhere,
+                select: {
+                    [relationField.name]: {
+                        where,
+                        select: this.getIdentitySelection(relatedModel),
+                    },
+                },
+            })) as Record<string, unknown> | null;
+            const totalCount = Array.isArray(countRows?.[relationField.name])
+                ? (countRows?.[relationField.name] as unknown[]).length
+                : 0;
+
+            const pageInfo = await this.buildRelayPageInfoForNested(
+                model,
+                relationField,
+                delegate,
+                parentWhere,
+                relatedModel,
+                where,
+                orderBy,
+                query,
+                page.rows,
+                page.hasExtra
+            );
+
+            return this.createRelayConnectionResult(relatedModel, page.rows, pageInfo, totalCount, orderBy);
+        };
+    }
+
     private mergeSelections(
         left: Record<string, unknown> | undefined,
         right: Record<string, unknown> | undefined
@@ -2439,6 +2863,235 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
     }
 
+    private validationError(message: string, details?: unknown) {
+        return Object.assign(new Error(message), {
+            name: 'ValidationError',
+            details,
+        });
+    }
+
+    private getRelayPrimaryKeyPayload(
+        model: NormalizedModelDefinition,
+        record: Record<string, unknown>
+    ) {
+        const primaryKeyFields = getPrimaryKeyFields(model);
+        const pk = Object.fromEntries(
+            primaryKeyFields
+                .filter((fieldName) => record[fieldName] !== undefined)
+                .map((fieldName) => [fieldName, record[fieldName]])
+        );
+        if (Object.keys(pk).length !== primaryKeyFields.length) {
+            throw this.validationError(
+                `Missing primary key values for Relay model "${model.name}"`
+            );
+        }
+        return pk;
+    }
+
+    private wrapRelayRecord(
+        model: NormalizedModelDefinition,
+        record: Record<string, unknown>
+    ) {
+        return {
+            ...record,
+            __relayTypeName: `${this.naming.typeName(model.name)}Node`,
+        };
+    }
+
+    private encodeRelayNodeId(
+        model: NormalizedModelDefinition,
+        record: Record<string, unknown>
+    ) {
+        return encodeOpaquePayload({
+            v: 1,
+            model: model.name,
+            pk: this.getRelayPrimaryKeyPayload(model, record),
+        });
+    }
+
+    private decodeRelayNodeId(value: string) {
+        try {
+            const payload = decodeOpaquePayload(value);
+            if (
+                !isPlainObject(payload) ||
+                payload.v !== 1 ||
+                typeof payload.model !== 'string' ||
+                !isPlainObject(payload.pk)
+            ) {
+                throw new Error('Invalid node id payload');
+            }
+            return payload as RelayNodeIdPayload;
+        } catch {
+            throw this.validationError('Invalid Relay node id');
+        }
+    }
+
+    private encodeRelayCursor(
+        model: NormalizedModelDefinition,
+        record: Record<string, unknown>,
+        order: unknown[]
+    ) {
+        return encodeOpaquePayload({
+            v: 1,
+            model: model.name,
+            pk: this.getRelayPrimaryKeyPayload(model, record),
+            order,
+        });
+    }
+
+    private decodeRelayCursor(
+        model: NormalizedModelDefinition,
+        value: string,
+        order: unknown[]
+    ) {
+        try {
+            const payload = decodeOpaquePayload(value);
+            if (
+                !isPlainObject(payload) ||
+                payload.v !== 1 ||
+                payload.model !== model.name ||
+                !isPlainObject(payload.pk) ||
+                !Array.isArray(payload.order)
+            ) {
+                throw new Error('Invalid cursor payload');
+            }
+            if (stableSerialize(payload.order) !== stableSerialize(order)) {
+                throw this.validationError(`Relay cursor order does not match "${model.name}" ordering`);
+            }
+            return payload as RelayCursorPayload;
+        } catch (error) {
+            if (error instanceof Error && error.name === 'ValidationError') {
+                throw error;
+            }
+            throw this.validationError(`Invalid Relay cursor for model "${model.name}"`);
+        }
+    }
+
+    private normalizeOrderByArray(orderBy: Record<string, unknown> | Record<string, unknown>[] | undefined) {
+        if (!orderBy) {
+            return [] as Record<string, unknown>[];
+        }
+        return Array.isArray(orderBy) ? orderBy : [orderBy];
+    }
+
+    private getRelayEffectiveOrderBy(model: NormalizedModelDefinition, input: unknown) {
+        const compiled = this.normalizeOrderByArray(this.toOrderBy(model, input));
+        const presentFields = new Set(
+            compiled.flatMap((clause) => Object.keys(clause))
+        );
+        const effective = [...compiled];
+        for (const fieldName of getPrimaryKeyFields(model)) {
+            if (!presentFields.has(fieldName)) {
+                effective.push({
+                    [fieldName]: 'asc',
+                });
+            }
+        }
+        return effective;
+    }
+
+    private compileRelayQueryShape(
+        model: NormalizedModelDefinition,
+        args: RelayConnectionArgs
+    ): RelayQueryShape {
+        const first = typeof args.first === 'number' ? args.first : undefined;
+        const last = typeof args.last === 'number' ? args.last : undefined;
+
+        if ((first === undefined && last === undefined) || (first !== undefined && last !== undefined)) {
+            throw this.validationError('Relay connections require exactly one of "first" or "last"');
+        }
+        if (first !== undefined && first <= 0) {
+            throw this.validationError('"first" must be a positive integer');
+        }
+        if (last !== undefined && last <= 0) {
+            throw this.validationError('"last" must be a positive integer');
+        }
+        if (args.after && args.before) {
+            throw this.validationError('Relay connections do not support using "after" and "before" together');
+        }
+        if (args.after && first === undefined) {
+            throw this.validationError('"after" can only be used with "first"');
+        }
+        if (args.before && last === undefined) {
+            throw this.validationError('"before" can only be used with "last"');
+        }
+
+        const order = this.getRelayEffectiveOrderBy(model, args.order_by);
+        if (first !== undefined) {
+            const cursorPayload = args.after
+                ? this.decodeRelayCursor(model, args.after, order)
+                : undefined;
+            return {
+                cursor: cursorPayload?.pk,
+                skip: cursorPayload ? 1 : undefined,
+                take: first + 1,
+                direction: 'forward',
+            };
+        }
+
+        const cursorPayload = args.before
+            ? this.decodeRelayCursor(model, args.before, order)
+            : undefined;
+        return {
+            cursor: cursorPayload?.pk,
+            skip: cursorPayload ? 1 : undefined,
+            take: -(last! + 1),
+            direction: 'backward',
+        };
+    }
+
+    private finalizeRelayRows(
+        model: NormalizedModelDefinition,
+        rawRows: Record<string, unknown>[],
+        query: RelayQueryShape
+    ) {
+        const limit = Math.abs(query.take) - 1;
+        if (query.direction === 'forward') {
+            const hasExtra = rawRows.length > limit;
+            const rows = (hasExtra ? rawRows.slice(0, limit) : rawRows).map((row) =>
+                this.wrapRelayRecord(model, row)
+            );
+            return { rows, hasExtra };
+        }
+
+        const hasExtra = rawRows.length > limit;
+        const trimmed = hasExtra ? rawRows.slice(0, -1) : rawRows;
+        const rows = [...trimmed].reverse().map((row) => this.wrapRelayRecord(model, row));
+        return { rows, hasExtra };
+    }
+
+    private createRelayConnectionResult(
+        model: NormalizedModelDefinition,
+        rows: Record<string, unknown>[],
+        pageInfo: RelayPageInfo,
+        totalCount: number,
+        orderBy: unknown[]
+    ): RelayConnectionResult {
+        return {
+            nodes: rows,
+            edges: rows.map((row) => ({
+                cursor: this.encodeRelayCursor(model, row, orderBy),
+                node: row,
+            })),
+            pageInfo,
+            totalCount,
+        };
+    }
+
+    private emptyRelayConnection(): RelayConnectionResult {
+        return {
+            nodes: [],
+            edges: [],
+            pageInfo: {
+                hasNextPage: false,
+                hasPreviousPage: false,
+                startCursor: null,
+                endCursor: null,
+            },
+            totalCount: 0,
+        };
+    }
+
     private compileFindManyArgs(
         model: NormalizedModelDefinition,
         args: Record<string, unknown>,
@@ -2452,6 +3105,252 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             skip: typeof args.offset === 'number' ? args.offset : undefined,
             select: this.buildSelection(model, info.fieldNodes, info),
         };
+    }
+
+    private async resolveRelayNode(client: TClient, id: string) {
+        const payload = this.decodeRelayNodeId(id);
+        const model = this.normalizedSchema.modelMap.get(payload.model);
+        if (!model || !this.isModelIncluded(model) || getPrimaryKeyFields(model).length === 0) {
+            return null;
+        }
+
+        const delegate = this.getRequiredDelegate(client, model);
+        const select = this.getRelayDefaultSelection(model);
+        if (delegate.findUnique) {
+            const row = await delegate.findUnique({
+                where: payload.pk,
+                select,
+            });
+            return isPlainObject(row) ? this.wrapRelayRecord(model, row) : null;
+        }
+
+        this.assertMethod(delegate, 'findMany', model);
+        const rows = await delegate.findMany!({
+            where: payload.pk,
+            take: 1,
+            select,
+        });
+        return isPlainObject(rows[0]) ? this.wrapRelayRecord(model, rows[0] as Record<string, unknown>) : null;
+    }
+
+    private async resolveRelayRootConnection(
+        model: NormalizedModelDefinition,
+        client: TClient,
+        args: RelayConnectionArgs
+    ) {
+        const delegate = this.getRequiredDelegate(client, model);
+        this.assertMethod(delegate, 'findMany', model);
+
+        const query = this.compileRelayQueryShape(model, args);
+        const where = this.toWhere(model, args.where);
+        const orderBy = this.getRelayEffectiveOrderBy(model, args.order_by);
+        const rawRows = (await delegate.findMany!({
+            where,
+            orderBy,
+            cursor: query.cursor,
+            skip: query.skip,
+            take: query.take,
+            select: this.getRelayDefaultSelection(model),
+        })) as Record<string, unknown>[];
+
+        const page = this.finalizeRelayRows(model, rawRows, query);
+        const pageInfo = await this.buildRelayPageInfoForRoot(
+            model,
+            delegate,
+            where,
+            orderBy,
+            query,
+            page.rows,
+            page.hasExtra
+        );
+        const totalCount = await this.resolveRelayTotalCount(model, delegate, where);
+        return this.createRelayConnectionResult(model, page.rows, pageInfo, totalCount, orderBy);
+    }
+
+    private async resolveRelayTotalCount(
+        model: NormalizedModelDefinition,
+        delegate: ModelDelegate,
+        where: Record<string, unknown> | undefined
+    ) {
+        if (delegate.count) {
+            return delegate.count({ where });
+        }
+        if (delegate.aggregate) {
+            const aggregate = await delegate.aggregate({
+                where,
+                _count: { _all: true },
+            });
+            return this.extractAggregateCount(aggregate);
+        }
+
+        this.assertMethod(delegate, 'findMany', model);
+        const rows = await delegate.findMany!({
+            where,
+            select: this.getIdentitySelection(model),
+        });
+        return rows.length;
+    }
+
+    private async buildRelayPageInfoForRoot(
+        model: NormalizedModelDefinition,
+        delegate: ModelDelegate,
+        where: Record<string, unknown> | undefined,
+        orderBy: unknown[],
+        query: RelayQueryShape,
+        rows: Record<string, unknown>[],
+        hasExtra: boolean
+    ): Promise<RelayPageInfo> {
+        const start = rows[0];
+        const end = rows[rows.length - 1];
+        const startCursor = start ? this.encodeRelayCursor(model, start, orderBy) : null;
+        const endCursor = end ? this.encodeRelayCursor(model, end, orderBy) : null;
+
+        if (rows.length === 0) {
+            return {
+                hasNextPage: false,
+                hasPreviousPage: false,
+                startCursor: null,
+                endCursor: null,
+            };
+        }
+
+        if (query.direction === 'forward') {
+            return {
+                hasNextPage: hasExtra,
+                hasPreviousPage: await this.relayRootProbe(
+                    model,
+                    delegate,
+                    where,
+                    orderBy,
+                    this.getRelayPrimaryKeyPayload(model, start),
+                    'backward'
+                ),
+                startCursor,
+                endCursor,
+            };
+        }
+
+        return {
+            hasNextPage: await this.relayRootProbe(
+                model,
+                delegate,
+                where,
+                orderBy,
+                this.getRelayPrimaryKeyPayload(model, end),
+                'forward'
+            ),
+            hasPreviousPage: hasExtra,
+            startCursor,
+            endCursor,
+        };
+    }
+
+    private async relayRootProbe(
+        model: NormalizedModelDefinition,
+        delegate: ModelDelegate,
+        where: Record<string, unknown> | undefined,
+        orderBy: unknown[],
+        cursor: Record<string, unknown>,
+        direction: RelayDirection
+    ) {
+        this.assertMethod(delegate, 'findMany', model);
+        const rows = await delegate.findMany!({
+            where,
+            orderBy,
+            cursor,
+            skip: 1,
+            take: direction === 'forward' ? 1 : -1,
+            select: this.getIdentitySelection(model),
+        });
+        return rows.length > 0;
+    }
+
+    private async buildRelayPageInfoForNested(
+        model: NormalizedModelDefinition,
+        relationField: NormalizedFieldDefinition,
+        delegate: ModelDelegate,
+        parentWhere: Record<string, unknown>,
+        relatedModel: NormalizedModelDefinition,
+        where: Record<string, unknown> | undefined,
+        orderBy: unknown[],
+        query: RelayQueryShape,
+        rows: Record<string, unknown>[],
+        hasExtra: boolean
+    ): Promise<RelayPageInfo> {
+        const start = rows[0];
+        const end = rows[rows.length - 1];
+        const startCursor = start ? this.encodeRelayCursor(relatedModel, start, orderBy) : null;
+        const endCursor = end ? this.encodeRelayCursor(relatedModel, end, orderBy) : null;
+
+        if (rows.length === 0) {
+            return {
+                hasNextPage: false,
+                hasPreviousPage: false,
+                startCursor: null,
+                endCursor: null,
+            };
+        }
+
+        if (query.direction === 'forward') {
+            return {
+                hasNextPage: hasExtra,
+                hasPreviousPage: await this.relayNestedProbe(
+                    delegate,
+                    parentWhere,
+                    relationField,
+                    relatedModel,
+                    where,
+                    orderBy,
+                    this.getRelayPrimaryKeyPayload(relatedModel, start),
+                    'backward'
+                ),
+                startCursor,
+                endCursor,
+            };
+        }
+
+        return {
+            hasNextPage: await this.relayNestedProbe(
+                delegate,
+                parentWhere,
+                relationField,
+                relatedModel,
+                where,
+                orderBy,
+                this.getRelayPrimaryKeyPayload(relatedModel, end),
+                'forward'
+            ),
+            hasPreviousPage: hasExtra,
+            startCursor,
+            endCursor,
+        };
+    }
+
+    private async relayNestedProbe(
+        delegate: ModelDelegate,
+        parentWhere: Record<string, unknown>,
+        relationField: NormalizedFieldDefinition,
+        relatedModel: NormalizedModelDefinition,
+        where: Record<string, unknown> | undefined,
+        orderBy: unknown[],
+        cursor: Record<string, unknown>,
+        direction: RelayDirection
+    ) {
+        const result = (await delegate.findUnique?.({
+            where: parentWhere,
+            select: {
+                [relationField.name]: {
+                    where,
+                    orderBy,
+                    cursor,
+                    skip: 1,
+                    take: direction === 'forward' ? 1 : -1,
+                    select: this.getIdentitySelection(relatedModel),
+                },
+            },
+        })) as Record<string, unknown> | null | undefined;
+        const rows = result?.[relationField.name];
+        return Array.isArray(rows) && rows.length > 0;
     }
 
     private buildSelection(

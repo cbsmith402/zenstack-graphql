@@ -9,7 +9,9 @@ Supported:
 - List roots: `<models>`
 - Primary-key roots: `<models>_by_pk`
 - Aggregate roots: `<models>_aggregate`
+- Relay roots: `<models>_connection` and `node(id:)` when `relay.enabled` is on
 - Nested relation reads
+- Nested Relay relation connections like `posts_connection`
 - Nested relation aggregate fields like `posts_aggregate`
 - Filtering with Hasura-style comparison operators, relation filters, and provider-aware JSON operators
 - Ordering, including ORM-backed relation `count` ordering
@@ -20,6 +22,7 @@ Partially supported:
 - `distinct_on`: generated only for providers where ZenStack exposes distinct support
 - Relation aggregate `order_by`: only `count` is supported today
 - Typed JSON filters: supported for typedef-backed scalar/object/list structures, but not arbitrary nested relations inside typedefs
+- Relay uses a parallel type layer (`UserNode`, `PostNode`, etc.) so it does not overwrite existing Hasura-style model object types
 
 Not supported:
 

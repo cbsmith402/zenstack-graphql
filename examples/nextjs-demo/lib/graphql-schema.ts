@@ -19,6 +19,7 @@ export function normalizeDemoRole(input: string | null | undefined): DemoRole {
 
 export const graphqlSchemaFactory = createZenStackGraphQLSchemaFactory({
     schema,
+    relay: { enabled: true },
     async getClient() {
         return ensureDemoDatabaseReady();
     },
