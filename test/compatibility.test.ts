@@ -239,4 +239,40 @@ test('matches Hasura-style relation aggregate order_by semantics on parent colle
     });
 });
 
-test.todo('matches richer Hasura relationship filter semantics beyond simple list->some lowering');
+test('matches richer Hasura relationship filter semantics beyond simple list->some lowering', async () => {
+    const { client } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => client,
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query HasuraRelationFilters {
+                users_some: users(where: { posts_some: { views: { _gte: 8 } } }, order_by: [{ id: asc }]) {
+                    id
+                    name
+                }
+                users_every: users(where: { posts_every: { views: { _gte: 8 } } }, order_by: [{ id: asc }]) {
+                    id
+                    name
+                }
+                users_none: users(where: { posts_none: { title: { _ilike: "%Notes%" } } }, order_by: [{ id: asc }]) {
+                    id
+                    name
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        users_some: [
+            { id: 1, name: 'Ada' },
+            { id: 2, name: 'Ben' },
+        ],
+        users_every: [{ id: 2, name: 'Ben' }],
+        users_none: [{ id: 2, name: 'Ben' }],
+    });
+});

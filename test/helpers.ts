@@ -322,17 +322,56 @@ function recordMatches(
         }
 
         if (modelName === 'User' && key === 'posts') {
-            if (!isRecord(value) || !isRecord(value.some)) {
+            if (!isRecord(value)) {
                 return false;
             }
-            const someWhere = value.some;
-            if (!getUserPosts(store, record as UserRecord).some((post) => recordMatches(store, 'Post', post, someWhere))) {
+            const posts = getUserPosts(store, record as UserRecord);
+            if (isRecord(value.some) && !posts.some((post) => recordMatches(store, 'Post', post, value.some))) {
+                return false;
+            }
+            if (isRecord(value.every) && !posts.every((post) => recordMatches(store, 'Post', post, value.every))) {
+                return false;
+            }
+            if (isRecord(value.none) && posts.some((post) => recordMatches(store, 'Post', post, value.none))) {
+                return false;
+            }
+            continue;
+        }
+
+        if (modelName === 'User' && key === 'posts_some') {
+            if (!isRecord(value)) {
+                return false;
+            }
+            if (!getUserPosts(store, record as UserRecord).some((post) => recordMatches(store, 'Post', post, value))) {
+                return false;
+            }
+            continue;
+        }
+
+        if (modelName === 'User' && key === 'posts_every') {
+            if (!isRecord(value)) {
+                return false;
+            }
+            if (!getUserPosts(store, record as UserRecord).every((post) => recordMatches(store, 'Post', post, value))) {
+                return false;
+            }
+            continue;
+        }
+
+        if (modelName === 'User' && key === 'posts_none') {
+            if (!isRecord(value)) {
+                return false;
+            }
+            if (getUserPosts(store, record as UserRecord).some((post) => recordMatches(store, 'Post', post, value))) {
                 return false;
             }
             continue;
         }
 
         if (modelName === 'Post' && key === 'author') {
+            if (value === null) {
+                return getPostAuthor(store, record as PostRecord) === null;
+            }
             if (!isRecord(value) || !isRecord(value.is)) {
                 return false;
             }

@@ -1202,6 +1202,17 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                             continue;
                         }
                         fields[field.name] = { type: this.getWhereInput(this.getModel(field.type)) };
+                        if (field.isList) {
+                            fields[`${field.name}_some`] = {
+                                type: this.getWhereInput(this.getModel(field.type)),
+                            };
+                            fields[`${field.name}_every`] = {
+                                type: this.getWhereInput(this.getModel(field.type)),
+                            };
+                            fields[`${field.name}_none`] = {
+                                type: this.getWhereInput(this.getModel(field.type)),
+                            };
+                        }
                     } else {
                         const filterKinds = this.getFieldFilterKinds(model, field);
                         if (filterKinds.length === 0) {
@@ -2417,6 +2428,25 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const result: Record<string, unknown> = {};
+        const mergeRelationFilter = (
+            relationName: string,
+            operator: 'some' | 'every' | 'none' | 'is',
+            relatedWhere: Record<string, unknown> | null
+        ) => {
+            if (operator === 'is') {
+                result[relationName] = relatedWhere;
+                return;
+            }
+
+            const existing = isPlainObject(result[relationName])
+                ? (result[relationName] as Record<string, unknown>)
+                : {};
+            result[relationName] = {
+                ...existing,
+                [operator]: relatedWhere,
+            };
+        };
+
         for (const [key, value] of Object.entries(input)) {
             if (value === undefined) {
                 continue;
@@ -2442,16 +2472,45 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             }
 
             const field = model.fieldMap.get(key);
+            const relationSuffixMatch = key.match(/^(.*)_(some|every|none)$/);
+            if (!field && relationSuffixMatch) {
+                const [, relationName, operator] = relationSuffixMatch;
+                const relationField = model.fieldMap.get(relationName);
+                if (!relationField || relationField.kind !== 'relation' || !relationField.isList) {
+                    continue;
+                }
+
+                const relatedWhere = this.toWhere(this.getModel(relationField.type), value);
+                if (!relatedWhere) {
+                    continue;
+                }
+                mergeRelationFilter(
+                    relationName,
+                    operator as 'some' | 'every' | 'none',
+                    relatedWhere
+                );
+                continue;
+            }
+
             if (!field) {
                 continue;
             }
 
             if (field.kind === 'relation') {
+                if (!field.isList && value === null) {
+                    mergeRelationFilter(key, 'is', null);
+                    continue;
+                }
+
                 const relatedWhere = this.toWhere(this.getModel(field.type), value);
                 if (!relatedWhere) {
                     continue;
                 }
-                result[key] = field.isList ? { some: relatedWhere } : { is: relatedWhere };
+                mergeRelationFilter(
+                    key,
+                    field.isList ? 'some' : 'is',
+                    relatedWhere
+                );
                 continue;
             }
 

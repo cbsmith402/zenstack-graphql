@@ -41,6 +41,7 @@ The generated schema uses Hasura-like defaults:
 - `insert_*` and `insert_*_one` support `on_conflict`
 - `*_insert_input` supports nested relation `data` inserts
 - `*_set_input` supports relation-aware updates for the nested mutation shapes supported by the underlying ZenStack ORM
+- To-many relation filters support the ORM-backed `some`, `every`, and `none` semantics via additive GraphQL fields like `posts_some`, `posts_every`, and `posts_none`
 - `features.computedFields` enables read-only `@computed` fields detected from ZenStack-generated metadata
 - `slicing` supports schema pruning with ZenStack-style model, operation, procedure, and filter slicing, plus GraphQL field visibility pruning for role-specific schemas
 - `createZenStackGraphQLSchemaFactory` caches one generated schema per slice key, which makes role-aware introspection and execution much easier
