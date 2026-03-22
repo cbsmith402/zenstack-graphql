@@ -255,6 +255,80 @@ export const sampleOperations = [
         variables: '{}',
     },
     {
+        label: 'Relay Root Connection',
+        description:
+            'Use the additive Relay layer without changing the existing Hasura-style list roots.',
+        query: `query RelayRootConnection {
+  users_connection(first: 2, order_by: [{ id: asc }]) {
+    totalCount
+    nodes {
+      id
+      name
+      age
+    }
+    edges {
+      cursor
+      node {
+        id
+        name
+      }
+    }
+    pageInfo {
+      hasNextPage
+      hasPreviousPage
+      startCursor
+      endCursor
+    }
+  }
+}`,
+        variables: '{}',
+    },
+    {
+        label: 'Relay Nested Connection',
+        description:
+            'Page through a nested to-many relation with a Relay cursor while leaving the Hasura-style fields intact.',
+        query: `query RelayNestedConnection {
+  users_connection(first: 1, order_by: [{ id: asc }]) {
+    nodes {
+      id
+      name
+      posts_connection(
+        first: 1
+        after: "eyJ2IjoxLCJtb2RlbCI6IlBvc3QiLCJwayI6eyJpZCI6MTF9LCJvcmRlciI6W3sidmlld3MiOiJkZXNjIn0seyJpZCI6ImFzYyJ9XX0"
+        order_by: [{ views: desc }]
+      ) {
+        totalCount
+        nodes {
+          id
+          title
+          views
+        }
+        pageInfo {
+          hasNextPage
+          hasPreviousPage
+        }
+      }
+    }
+  }
+}`,
+        variables: '{}',
+    },
+    {
+        label: 'Relay Node Lookup',
+        description:
+            'Resolve a global Relay node id through the new node(id:) root without changing the existing model objects.',
+        query: `query RelayNodeLookup {
+  node(id: "eyJ2IjoxLCJtb2RlbCI6IlVzZXIiLCJwayI6eyJpZCI6MX19") {
+    ... on UserNode {
+      id
+      name
+      age
+    }
+  }
+}`,
+        variables: '{}',
+    },
+    {
         label: 'Relation Aggregate',
         description: 'Query Hasura-style relation aggregate fields generated from the ZenStack models.',
         query: `query RelationAggregate {

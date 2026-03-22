@@ -17,6 +17,7 @@ export type {
     ModelDelegate,
     NamingConfig,
     NamingStrategy,
+    RelayOptions,
     ProcedureDefinition,
     ProcedureParamDefinition,
     NormalizedModelDefinition,

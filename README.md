@@ -27,7 +27,7 @@ const schema = createZenStackGraphQLSchema({
 
 ## Public API
 
-- `createZenStackGraphQLSchema({ schema, getClient, naming, features, slicing, scalars, hooks, extensions })`
+- `createZenStackGraphQLSchema({ schema, getClient, naming, features, relay, slicing, scalars, hooks, extensions })`
 - `createZenStackGraphQLSchemaFactory({ schema, getClient, getSlicing, getCacheKey, ... })`
 - `normalizeSchema(schema)`
 - `normalizeError(error)`
@@ -52,6 +52,7 @@ The generated schema uses Hasura-like defaults:
 - `*_by_pk` roots are emitted only for real primary keys
 - Relation aggregate `order_by` on parent collections is currently supported only for `count`, matching the documented ORM `orderBy: { relation: { _count: ... } }` shape
 - `distinct_on` is generated only for providers where the ORM supports `distinct`
+- `relay.enabled` adds an opt-in Relay query layer with `<models>_connection`, nested `<relation>_connection`, and `node(id:)`
 
 ## Compatibility Snapshot
 
@@ -69,6 +70,7 @@ Supported well today:
 - Manual custom root resolvers through `extensions`
 - Role-aware schema pruning through `slicing` or the schema factory
 - Request-wide mutation transactions when the client exposes `$transaction`
+- Optional Relay root and nested connections plus `node(id:)`
 
 Supported, but with explicit limits:
 
@@ -76,6 +78,7 @@ Supported, but with explicit limits:
 - Provider-specific operators only appear where ZenStack metadata says the backend supports them
 - Typed JSON / typedef filters are supported recursively for scalar, enum, typedef, and list-of-typedef fields, but not arbitrary relation fields nested inside typedefs
 - Role-aware schemas are static per slice key; auth enforcement still belongs in the ZenStack client you provide
+- Relay is implemented as a parallel type layer, so connection `node` objects use `UserNode` / `PostNode` types instead of reusing the existing Hasura-style `User` / `Post` object types
 
 Intentionally unsupported right now:
 
@@ -147,6 +150,7 @@ The playground includes examples for:
 - CRUD mutations, nested inserts, and `on_conflict`
 - Atomic rollback across multiple mutation fields
 - JSON-path filters and `_between`
+- Relay root connections, nested relation connections, and `node(id:)`
 - ZenStack procedures and manual extension roots
 - Role-pruned schemas with `x-hasura-role`
 

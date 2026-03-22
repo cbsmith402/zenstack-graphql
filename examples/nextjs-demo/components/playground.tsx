@@ -128,6 +128,7 @@ export function Playground({
                         </p>
                         <div className="pill-row">
                             <span className="pill">Hasura-style root fields</span>
+                            <span className="pill">Relay connections + node</span>
                             <span className="pill">Nested relation reads</span>
                             <span className="pill">Aggregates + CRUD mutations</span>
                             <span className="pill">JSON + between filters</span>
