@@ -194,6 +194,7 @@ export interface NormalizedSchema {
 export interface ProviderCapabilities {
     provider: string;
     supportsInsensitiveMode: boolean;
+    supportsDistinctOn: boolean;
     supportsJsonFilters: boolean;
     supportsJsonFilterMode: boolean;
     supportsScalarListFilters: boolean;

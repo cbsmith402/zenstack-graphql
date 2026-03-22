@@ -410,6 +410,7 @@ export function getProviderCapabilities(schema: NormalizedSchema): ProviderCapab
     return {
         provider,
         supportsInsensitiveMode: provider !== 'sqlite',
+        supportsDistinctOn: provider !== 'sqlite' && provider !== 'mysql',
         supportsJsonFilters: provider !== 'unknown',
         supportsJsonFilterMode: provider === 'postgresql',
         supportsScalarListFilters: provider === 'postgresql',

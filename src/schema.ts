@@ -301,6 +301,8 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly typeDefObjectTypes = new Map<string, GraphQLObjectType>();
     private readonly enumTypes = new Map<string, GraphQLEnumType>();
     private readonly typeDefInputTypes = new Map<string, GraphQLInputObjectType>();
+    private readonly typeDefWhereInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly typeDefListWhereInputs = new Map<string, GraphQLInputObjectType>();
     private readonly selectColumnEnums = new Map<string, GraphQLEnumType>();
     private readonly comparisonInputs = new Map<string, GraphQLInputObjectType>();
     private readonly whereInputs = new Map<string, GraphQLInputObjectType>();
@@ -332,6 +334,10 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
     private supportsInsensitiveMode() {
         return this.providerCapabilities.supportsInsensitiveMode;
+    }
+
+    private supportsDistinctOn() {
+        return this.providerCapabilities.supportsDistinctOn;
     }
 
     private supportsJsonFilters() {
@@ -956,7 +962,11 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return {
             where: { type: this.getWhereInput(model) },
             order_by: { type: new GraphQLList(this.getOrderByInput(model)) },
-            distinct_on: this.getDistinctOnArg(model),
+            ...(this.supportsDistinctOn()
+                ? {
+                      distinct_on: this.getDistinctOnArg(model),
+                  }
+                : {}),
             limit: { type: GraphQLInt },
             offset: { type: GraphQLInt },
         };
@@ -1118,6 +1128,9 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     fields._gte = { type: baseType };
                     fields._lt = { type: baseType };
                     fields._lte = { type: baseType };
+                    fields._between = {
+                        type: new GraphQLList(new GraphQLNonNull(baseType)),
+                    };
                 }
 
                 if (
@@ -1181,6 +1194,73 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         return input;
     }
 
+    private getTypeDefComparatorInput(
+        typeDef: NormalizedTypeDefDefinition,
+        field: NormalizedFieldDefinition
+    ) {
+        const filterKinds = this.getDefaultFieldFilterKinds(field);
+        const typeName = `${typeDef.name}_${field.name}_comparison_exp`;
+        const key = `${typeName}:${field.kind}:${field.type}:${field.isList ? 'list' : 'single'}:${filterKinds.join(',')}`;
+        const existing = this.comparisonInputs.get(key);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: typeName,
+            fields: () => {
+                const scalarType =
+                    field.kind === 'enum'
+                        ? this.getEnumType(field.type)
+                        : getScalarType(field.type as ScalarType, this.options.scalars);
+                const baseType = field.isList
+                    ? new GraphQLList(new GraphQLNonNull(scalarType))
+                    : scalarType;
+                const fields: GraphQLInputFieldConfigMap = {
+                    _eq: { type: baseType },
+                    _neq: { type: baseType },
+                    _in: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
+                    _nin: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
+                    _is_null: { type: getScalarType('Boolean', this.options.scalars) },
+                };
+
+                if (!field.isList && field.kind === 'scalar' && isComparableScalar(field.type)) {
+                    fields._gt = { type: baseType };
+                    fields._gte = { type: baseType };
+                    fields._lt = { type: baseType };
+                    fields._lte = { type: baseType };
+                    fields._between = {
+                        type: new GraphQLList(new GraphQLNonNull(baseType)),
+                    };
+                }
+
+                if (!field.isList && field.kind === 'scalar' && field.type === 'String') {
+                    fields._contains = { type: GraphQLString };
+                    fields._ncontains = { type: GraphQLString };
+                    fields._icontains = { type: GraphQLString };
+                    fields._nicontains = { type: GraphQLString };
+                    fields._starts_with = { type: GraphQLString };
+                    fields._nstarts_with = { type: GraphQLString };
+                    fields._istarts_with = { type: GraphQLString };
+                    fields._nistarts_with = { type: GraphQLString };
+                    fields._ends_with = { type: GraphQLString };
+                    fields._nends_with = { type: GraphQLString };
+                    fields._iends_with = { type: GraphQLString };
+                    fields._niends_with = { type: GraphQLString };
+                    fields._like = { type: GraphQLString };
+                    fields._nlike = { type: GraphQLString };
+                    fields._ilike = { type: GraphQLString };
+                    fields._nilike = { type: GraphQLString };
+                }
+
+                return fields;
+            },
+        });
+
+        this.comparisonInputs.set(key, input);
+        return input;
+    }
+
     private getWhereInput(model: NormalizedModelDefinition) {
         const existing = this.whereInputs.get(model.name);
         if (existing) {
@@ -1213,6 +1293,12 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                                 type: this.getWhereInput(this.getModel(field.type)),
                             };
                         }
+                    } else if (field.kind === 'typeDef') {
+                        fields[field.name] = {
+                            type: field.isList
+                                ? this.getTypeDefListWhereInput(this.getTypeDef(field.type))
+                                : this.getTypeDefWhereInput(this.getTypeDef(field.type)),
+                        };
                     } else {
                         const filterKinds = this.getFieldFilterKinds(model, field);
                         if (filterKinds.length === 0) {
@@ -1227,6 +1313,67 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         });
 
         this.whereInputs.set(model.name, input);
+        return input;
+    }
+
+    private getTypeDefListWhereInput(typeDef: NormalizedTypeDefDefinition) {
+        const existing = this.typeDefListWhereInputs.get(typeDef.name);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: `${typeDef.name}_list_bool_exp`,
+            fields: () => ({
+                some: { type: this.getTypeDefWhereInput(typeDef) },
+                every: { type: this.getTypeDefWhereInput(typeDef) },
+                none: { type: this.getTypeDefWhereInput(typeDef) },
+            }),
+        });
+
+        this.typeDefListWhereInputs.set(typeDef.name, input);
+        return input;
+    }
+
+    private getTypeDefWhereInput(typeDef: NormalizedTypeDefDefinition) {
+        const existing = this.typeDefWhereInputs.get(typeDef.name);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: `${typeDef.name}_bool_exp`,
+            fields: () => {
+                const fields: GraphQLInputFieldConfigMap = {
+                    _and: { type: new GraphQLList(new GraphQLNonNull(input)) },
+                    _or: { type: new GraphQLList(new GraphQLNonNull(input)) },
+                    _not: { type: input },
+                };
+
+                for (const field of typeDef.fields) {
+                    if (field.kind === 'typeDef') {
+                        fields[field.name] = {
+                            type: field.isList
+                                ? this.getTypeDefListWhereInput(this.getTypeDef(field.type))
+                                : this.getTypeDefWhereInput(this.getTypeDef(field.type)),
+                        };
+                        continue;
+                    }
+
+                    if (field.kind === 'relation') {
+                        continue;
+                    }
+
+                    fields[field.name] = {
+                        type: this.getTypeDefComparatorInput(typeDef, field),
+                    };
+                }
+
+                return fields;
+            },
+        });
+
+        this.typeDefWhereInputs.set(typeDef.name, input);
         return input;
     }
 
@@ -2514,6 +2661,102 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 continue;
             }
 
+            if (field.kind === 'typeDef') {
+                if (field.isList) {
+                    const relatedWhere = this.toTypeDefListWhere(this.getTypeDef(field.type), value);
+                    if (!relatedWhere) {
+                        continue;
+                    }
+                    result[key] = relatedWhere;
+                } else {
+                    const relatedWhere = this.toTypeDefWhere(this.getTypeDef(field.type), value);
+                    if (!relatedWhere) {
+                        continue;
+                    }
+                    result[key] = relatedWhere;
+                }
+                continue;
+            }
+
+            result[key] = this.toScalarWhere(field, value);
+        }
+
+        return Object.keys(result).length > 0 ? result : undefined;
+    }
+
+    private toTypeDefListWhere(
+        typeDef: NormalizedTypeDefDefinition,
+        input: unknown
+    ): Record<string, unknown> | undefined {
+        if (!isPlainObject(input)) {
+            return undefined;
+        }
+
+        const result: Record<string, unknown> = {};
+        if (isPlainObject(input.some)) {
+            result.some = this.toTypeDefWhere(typeDef, input.some);
+        }
+        if (isPlainObject(input.every)) {
+            result.every = this.toTypeDefWhere(typeDef, input.every);
+        }
+        if (isPlainObject(input.none)) {
+            result.none = this.toTypeDefWhere(typeDef, input.none);
+        }
+        return Object.keys(result).length > 0 ? result : undefined;
+    }
+
+    private toTypeDefWhere(
+        typeDef: NormalizedTypeDefDefinition,
+        input: unknown
+    ): Record<string, unknown> | undefined {
+        if (!isPlainObject(input)) {
+            return undefined;
+        }
+
+        const result: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(input)) {
+            if (value === undefined) {
+                continue;
+            }
+
+            if (key === '_and' && Array.isArray(value)) {
+                result.AND = value
+                    .map((entry) => this.toTypeDefWhere(typeDef, entry))
+                    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+                continue;
+            }
+
+            if (key === '_or' && Array.isArray(value)) {
+                result.OR = value
+                    .map((entry) => this.toTypeDefWhere(typeDef, entry))
+                    .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+                continue;
+            }
+
+            if (key === '_not') {
+                result.NOT = this.toTypeDefWhere(typeDef, value);
+                continue;
+            }
+
+            const field = typeDef.fieldMap.get(key);
+            if (!field) {
+                continue;
+            }
+
+            if (field.kind === 'typeDef') {
+                const nested = field.isList
+                    ? this.toTypeDefListWhere(this.getTypeDef(field.type), value)
+                    : this.toTypeDefWhere(this.getTypeDef(field.type), value);
+                if (nested) {
+                    result[key] = nested;
+                }
+                continue;
+            }
+
+            if (field.kind === 'relation') {
+                continue;
+            }
+
             result[key] = this.toScalarWhere(field, value);
         }
 
@@ -2570,6 +2813,9 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     break;
                 case '_lte':
                     result.lte = value;
+                    break;
+                case '_between':
+                    result.between = value;
                     break;
                 case '_in':
                     result.in = value;

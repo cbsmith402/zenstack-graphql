@@ -38,6 +38,8 @@ The generated schema uses Hasura-like defaults:
 - Mutation roots: `insert_users`, `insert_users_one`, `update_users`, `update_users_by_pk`, `delete_users`, `delete_users_by_pk`
 - String filters include Hasura-style pattern operators like `_like`, `_nlike`, `_ilike`, and `_nilike`, plus extended prefix/suffix/contains variants
 - Provider-specific filters now include PostgreSQL scalar-list operators (`has`, `hasEvery`, `hasSome`, `isEmpty`) and ZenStack-style `Json` filters with JSON-path support
+- Comparable scalar filters include `_between`
+- Strongly typed JSON / typedef-backed fields can be filtered recursively, including list-object filters with `some`, `every`, and `none`
 - `insert_*` and `insert_*_one` support `on_conflict`
 - `*_insert_input` supports nested relation `data` inserts
 - `*_set_input` supports relation-aware updates for the nested mutation shapes supported by the underlying ZenStack ORM
@@ -49,6 +51,7 @@ The generated schema uses Hasura-like defaults:
 - `extensions.query` and `extensions.mutation` let you attach manual GraphQL root fields that receive the same request-scoped ZenStack client as generated resolvers
 - `*_by_pk` roots are emitted only for real primary keys
 - Relation aggregate `order_by` on parent collections is currently supported only for `count`, matching the documented ORM `orderBy: { relation: { _count: ... } }` shape
+- `distinct_on` is generated only for providers where the ORM supports `distinct`
 
 ## Role-aware schemas
 

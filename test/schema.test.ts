@@ -855,6 +855,124 @@ test('compiles provider-specific json and scalar-list filters', async () => {
     });
 });
 
+test('supports _between filters for comparable scalar fields', async () => {
+    const { client } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema,
+        getClient: async () => client,
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /_between: \[Int!]/);
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                users(where: { age: { _between: [20, 40] } }, order_by: [{ id: asc }]) {
+                    id
+                    name
+                    age
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        users: [{ id: 1, name: 'Ada', age: 34 }],
+    });
+});
+
+test('generates and compiles typed json filters from type definitions', async () => {
+    let capturedWhere: unknown;
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            provider: { type: 'postgresql' },
+            typeDefs: {
+                Job: {
+                    fields: {
+                        title: { name: 'title', type: 'String' },
+                    },
+                },
+                Profile: {
+                    fields: {
+                        age: { name: 'age', type: 'Int', optional: true },
+                        jobs: { name: 'jobs', type: 'Job', array: true, optional: true },
+                    },
+                },
+            },
+            models: {
+                User: {
+                    fields: {
+                        id: { name: 'id', type: 'Int', id: true },
+                        name: { name: 'name', type: 'String' },
+                        profile: { name: 'profile', type: 'Profile', optional: true },
+                    },
+                    idFields: ['id'],
+                    uniqueFields: { id: { type: 'Int' } },
+                },
+            },
+        },
+        getClient: async () => ({
+            User: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedWhere = args?.where;
+                    return [];
+                },
+            },
+            user: {
+                async findMany(args?: Record<string, unknown>) {
+                    capturedWhere = args?.where;
+                    return [];
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /profile: Profile_bool_exp/);
+    assert.match(printed, /jobs: Job_list_bool_exp/);
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                users(
+                    where: {
+                        profile: {
+                            age: { _between: [18, 65] }
+                            jobs: {
+                                some: {
+                                    title: { _contains: "Dev" }
+                                }
+                            }
+                        }
+                    }
+                ) {
+                    id
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(capturedWhere, {
+        profile: {
+            age: {
+                between: [18, 65],
+            },
+            jobs: {
+                some: {
+                    title: {
+                        contains: 'Dev',
+                    },
+                },
+            },
+        },
+    });
+});
+
 test('gates provider-specific json mode and scalar-list operators for sqlite', async () => {
     const graphqlSchema = createZenStackGraphQLSchema({
         schema: {
@@ -887,6 +1005,7 @@ test('gates provider-specific json mode and scalar-list operators for sqlite', a
     const printed = printSchema(graphqlSchema);
     assert.doesNotMatch(printed, /mode: query_mode/);
     assert.doesNotMatch(printed, /hasSome: \[String!]/);
+    assert.doesNotMatch(printed, /distinct_on:/);
 });
 
 test('executes insert, update, and delete mutations', async () => {
@@ -1246,8 +1365,8 @@ test('omits insensitive mode for sqlite-backed string filters', async () => {
     let capturedWhere: unknown;
     const graphqlSchema = createZenStackGraphQLSchema({
         schema: {
-            provider: { type: 'sqlite' },
             ...schema,
+            provider: { type: 'sqlite' },
         },
         getClient: async () => ({
             User: {
@@ -1288,8 +1407,8 @@ test('preserves negated insensitive filters for providers that support mode', as
     let capturedWhere: unknown;
     const graphqlSchema = createZenStackGraphQLSchema({
         schema: {
-            provider: { type: 'postgresql' },
             ...schema,
+            provider: { type: 'postgresql' },
         },
         getClient: async () => ({
             User: {

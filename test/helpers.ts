@@ -39,9 +39,13 @@ type QueryArgs = {
 };
 
 export const schema: {
+    provider: { type: string };
     models: ModelDefinition[];
     enums: { name: string; values: string[] }[];
 } = {
+    provider: {
+        type: 'postgresql',
+    },
     models: [
         {
             name: 'User',
@@ -122,6 +126,12 @@ function matchesScalarFilter(value: unknown, filter: unknown) {
     }
     if (filter.lte !== undefined && !(Number(value) <= Number(filter.lte))) {
         return false;
+    }
+    if (Array.isArray(filter.between) && filter.between.length >= 2) {
+        const [lower, upper] = filter.between;
+        if (compareValues(value, lower) < 0 || compareValues(value, upper) > 0) {
+            return false;
+        }
     }
     if (Array.isArray(filter.in) && !filter.in.includes(value)) {
         return false;
