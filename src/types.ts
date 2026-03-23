@@ -255,6 +255,20 @@ export interface RelayOptions {
     enabled?: boolean;
 }
 
+export interface GraphQLHandlerRequest<TRequest = unknown> {
+    method: string;
+    request: TRequest;
+    headers?: Headers | Record<string, unknown>;
+    searchParams?: URLSearchParams | URL | Record<string, unknown>;
+    body?: unknown;
+}
+
+export interface GraphQLHandlerResponse {
+    status: number;
+    headers?: Record<string, string>;
+    body: unknown;
+}
+
 export type SchemaFilterKind =
     | 'Equality'
     | 'Range'
