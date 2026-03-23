@@ -2,10 +2,39 @@
 
 `zenstack-graphql` is a standalone GraphQL adapter for ZenStack-style model metadata. It generates a framework-agnostic `GraphQLSchema` with Hasura-like CRUD roots, model-driven filters and ordering, aggregates, nested relation inserts, core insert/update/delete mutations, ZenStack procedure roots, and optional custom root resolvers.
 
-## Usage
+## Requirements
+
+- Node.js `>=18.17`
+- `graphql` `^16.11.0` as a peer dependency
+- ZenStack V3 schema metadata and a request-scoped ZenStack client
+
+## Install
+
+```bash
+npm install zenstack-graphql graphql
+```
+
+## Choose Your Surface
+
+Use the lowest-level API that matches your app:
+
+- `zenstack-graphql/core`
+  - For direct schema generation and custom GraphQL server wiring
+- `zenstack-graphql/server`
+  - For the framework-agnostic transport handler
+- `zenstack-graphql/next`
+  - For Next.js route handlers
+- `zenstack-graphql/express`
+  - For Express middleware
+- `zenstack-graphql/hono`
+  - For Hono handlers
+- `zenstack-graphql`
+  - Convenience root export that re-exports the full public surface
+
+## Core Usage
 
 ```ts
-import { createZenStackGraphQLSchema } from 'zenstack-graphql';
+import { createZenStackGraphQLSchema } from 'zenstack-graphql/core';
 
 const schema = createZenStackGraphQLSchema({
     schema: {
@@ -86,10 +115,12 @@ const response = await handler.handle({
 });
 ```
 
-Or use the thin framework adapters directly:
+Or use the thin framework adapters directly.
+
+### Next.js
 
 ```ts
-import { createNextGraphQLHandler } from 'zenstack-graphql';
+import { createNextGraphQLHandler } from 'zenstack-graphql/next';
 
 export const POST = createNextGraphQLHandler({
     schema,
@@ -103,6 +134,45 @@ export const POST = createNextGraphQLHandler({
     },
 });
 ```
+
+### Express
+
+```ts
+import express from 'express';
+import { createExpressGraphQLMiddleware } from 'zenstack-graphql/express';
+
+const app = express();
+app.use(express.json());
+
+app.use(
+    '/api/graphql',
+    createExpressGraphQLMiddleware({
+        schema,
+        async getClient(req) {
+            return getZenStackClientFromRequest(req);
+        },
+    })
+);
+```
+
+### Hono
+
+```ts
+import { Hono } from 'hono';
+import { createHonoGraphQLHandler } from 'zenstack-graphql/hono';
+
+const app = new Hono();
+const graphql = createHonoGraphQLHandler({
+    schema,
+    async getClient(request) {
+        return getZenStackClientFromRequest(request);
+    },
+});
+
+app.all('/api/graphql', (c) => graphql(c));
+```
+
+### Transport Notes
 
 The current adapter layer supports:
 
@@ -150,6 +220,7 @@ Intentionally unsupported right now:
 - Any feature that would require in-memory query semantics instead of safe ORM lowering
 
 See [docs/compatibility.md](/Users/cbsmith/Projects/zenstack-graphql/docs/compatibility.md) for the longer compatibility matrix and [docs/migration.md](/Users/cbsmith/Projects/zenstack-graphql/docs/migration.md) for a practical Hasura migration checklist.
+Release notes for the current adapter surface are in [CHANGELOG.md](/Users/cbsmith/Projects/zenstack-graphql/CHANGELOG.md).
 
 ## Role-aware schemas
 
@@ -159,7 +230,7 @@ from request context.
 ```ts
 import {
     createZenStackGraphQLSchemaFactory,
-} from 'zenstack-graphql';
+} from 'zenstack-graphql/core';
 
 const factory = createZenStackGraphQLSchemaFactory({
     schema,
@@ -194,6 +265,7 @@ const result = await factory.execute({
 - Delegates are expected to look Prisma-like (`findMany`, `findUnique`, `aggregate`, `create`, `update`, `delete`, and optional bulk variants).
 - Provider capabilities are normalized from the schema metadata so backend-specific filter behavior can be gated cleanly as the adapter grows.
 - ZenStack custom procedures are supported; database-native SQL routines are not auto-generated today.
+- The root `zenstack-graphql` entrypoint is a convenience export; framework-specific subpaths are the cleaner long-term import surface for apps and examples.
 
 ## Next.js Demo
 
