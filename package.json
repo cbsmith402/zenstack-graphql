@@ -68,8 +68,12 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "demo:express:dev": "npm run dev --prefix examples/express-demo",
+    "demo:express:typecheck": "npm run typecheck --prefix examples/express-demo",
     "demo:build": "npm run build --prefix examples/nextjs-demo",
     "demo:dev": "npm run dev --prefix examples/nextjs-demo",
+    "demo:hono:dev": "npm run dev --prefix examples/hono-demo",
+    "demo:hono:typecheck": "npm run typecheck --prefix examples/hono-demo",
     "demo:typecheck": "npm run typecheck --prefix examples/nextjs-demo",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/**/*.test.ts"

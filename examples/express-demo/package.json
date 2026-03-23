@@ -1,0 +1,32 @@
+{
+  "name": "zenstack-graphql-express-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "adapter:build": "npm run build --prefix ../..",
+    "dev": "npm run adapter:build && npm run zen:generate && tsx watch server.ts",
+    "start": "npm run adapter:build && npm run zen:generate && tsx server.ts",
+    "typecheck": "npm run adapter:build && npm run zen:generate && tsc --noEmit",
+    "zen:generate": "zenstack generate --no-tips"
+  },
+  "dependencies": {
+    "@zenstackhq/orm": "^3.4.6",
+    "better-sqlite3": "^12.8.0",
+    "express": "^5.1.0",
+    "graphql": "^16.11.0",
+    "zenstack-graphql": "file:../.."
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.5.2",
+    "@zenstackhq/cli": "^3.4.6",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2"
+  },
+  "zenstack": {
+    "schema": "./zenstack/schema.zmodel",
+    "output": "./zenstack"
+  }
+}

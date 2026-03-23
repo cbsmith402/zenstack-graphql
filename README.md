@@ -267,16 +267,23 @@ const result = await factory.execute({
 - ZenStack custom procedures are supported; database-native SQL routines are not auto-generated today.
 - The root `zenstack-graphql` entrypoint is a convenience export; framework-specific subpaths are the cleaner long-term import surface for apps and examples.
 
-## Next.js Demo
+## Example Apps
 
-A runnable sample app lives in `examples/nextjs-demo`.
+The repository now includes three runnable examples:
 
-It now uses a real ZenStack schema at `examples/nextjs-demo/zenstack/schema.zmodel`, generates the
-typed ZenStack schema with `zenstack generate`, boots a SQLite database, and serves the local
-GraphQL adapter through the new Next.js server adapter layer. The demo also supports Hasura-style
-role selection with the `x-hasura-role` header and swaps between cached pruned schemas in the browser.
+- `examples/nextjs-demo`
+  - Full browser playground with schema viewer, seeded data panel, role switching, and sample operations
+- `examples/express-demo`
+  - Minimal Express server using `createExpressGraphQLMiddleware`
+- `examples/hono-demo`
+  - Minimal Hono server using `createHonoGraphQLHandler`
 
-The playground includes examples for:
+All three examples use a real ZenStack schema, generate local metadata with `zenstack generate`,
+boot a SQLite database, and support Hasura-style role selection via the `x-hasura-role` header.
+
+### Next.js
+
+The Next.js playground includes examples for:
 
 - Nested reads and aggregates
 - CRUD mutations, nested inserts, and `on_conflict`
@@ -296,4 +303,32 @@ Or from the repo root:
 
 ```bash
 npm run demo:dev
+```
+
+### Express
+
+```bash
+cd examples/express-demo
+npm install
+npm run dev
+```
+
+Or from the repo root:
+
+```bash
+npm run demo:express:dev
+```
+
+### Hono
+
+```bash
+cd examples/hono-demo
+npm install
+npm run dev
+```
+
+Or from the repo root:
+
+```bash
+npm run demo:hono:dev
 ```
