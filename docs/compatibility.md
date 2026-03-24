@@ -87,3 +87,17 @@ Not supported:
 ## Guiding Principle
 
 If a feature cannot be lowered safely to the ZenStack ORM or a documented provider capability, the adapter prefers to omit it rather than emulate it with surprising semantics.
+
+## Server Integration
+
+Supported:
+
+- Framework-agnostic transport handling through `GraphQLApiHandler`
+- Thin server adapters for fetch/Web `Request`, Next.js route handlers, Express middleware, and Hono
+- Role-aware schema slicing through handler-derived request context
+
+Not supported:
+
+- GraphQL subscriptions over WebSocket or SSE
+- Multipart upload transport
+- Batched GraphQL transport requests

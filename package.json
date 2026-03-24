@@ -5,20 +5,84 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "engines": {
+    "node": ">=18.17"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./fetch": {
+      "types": "./dist/fetch.d.ts",
+      "import": "./dist/fetch.js"
+    },
+    "./next": {
+      "types": "./dist/next.d.ts",
+      "import": "./dist/next.js"
+    },
+    "./express": {
+      "types": "./dist/express.d.ts",
+      "import": "./dist/express.js"
+    },
+    "./hono": {
+      "types": "./dist/hono.d.ts",
+      "import": "./dist/hono.js"
+    },
+    "./hasura": {
+      "types": "./dist/hasura.d.ts",
+      "import": "./dist/hasura.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "typesVersions": {
+    "*": {
+      "core": [
+        "./dist/core.d.ts"
+      ],
+      "server": [
+        "./dist/server.d.ts"
+      ],
+      "fetch": [
+        "./dist/fetch.d.ts"
+      ],
+      "next": [
+        "./dist/next.d.ts"
+      ],
+      "express": [
+        "./dist/express.d.ts"
+      ],
+      "hono": [
+        "./dist/hono.d.ts"
+      ],
+      "hasura": [
+        "./dist/hasura.d.ts"
+      ]
     }
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "demo:express:dev": "npm run dev --prefix examples/express-demo",
+    "demo:express:typecheck": "npm run typecheck --prefix examples/express-demo",
     "demo:build": "npm run build --prefix examples/nextjs-demo",
     "demo:dev": "npm run dev --prefix examples/nextjs-demo",
+    "demo:hono:dev": "npm run dev --prefix examples/hono-demo",
+    "demo:hono:typecheck": "npm run typecheck --prefix examples/hono-demo",
+    "demo:tanstack:dev": "npm run dev --prefix examples/tanstack-start-demo",
+    "demo:tanstack:typecheck": "npm run typecheck --prefix examples/tanstack-start-demo",
     "demo:typecheck": "npm run typecheck --prefix examples/nextjs-demo",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/**/*.test.ts"

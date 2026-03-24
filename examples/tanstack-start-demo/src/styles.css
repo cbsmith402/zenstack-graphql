@@ -1,0 +1,165 @@
+:root {
+    color-scheme: light;
+    font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+    background: #f4efe7;
+    color: #1f1a17;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background:
+        radial-gradient(circle at top left, rgba(255, 176, 97, 0.25), transparent 28rem),
+        linear-gradient(180deg, #f4efe7 0%, #f7f4ee 100%);
+}
+
+a {
+    color: inherit;
+}
+
+button,
+select,
+textarea {
+    font: inherit;
+}
+
+.shell {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 2.5rem 1.5rem 4rem;
+}
+
+.hero {
+    display: grid;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.eyebrow {
+    font-size: 0.75rem;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #7c5e38;
+}
+
+.hero h1 {
+    margin: 0;
+    font-size: clamp(2.2rem, 6vw, 4.5rem);
+    line-height: 0.95;
+}
+
+.hero p {
+    margin: 0;
+    max-width: 52rem;
+    font-size: 1.05rem;
+    color: #5b4a3b;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.3fr) minmax(18rem, 0.8fr);
+    gap: 1.25rem;
+}
+
+.panel {
+    background: rgba(255, 252, 247, 0.86);
+    border: 1px solid rgba(97, 73, 43, 0.12);
+    border-radius: 1.25rem;
+    padding: 1.1rem;
+    box-shadow: 0 18px 40px rgba(52, 32, 9, 0.08);
+    backdrop-filter: blur(12px);
+}
+
+.panel h2,
+.panel h3 {
+    margin-top: 0;
+}
+
+.controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.pill {
+    border: 1px solid rgba(97, 73, 43, 0.18);
+    border-radius: 999px;
+    padding: 0.35rem 0.75rem;
+    background: #fff6ea;
+    font-size: 0.92rem;
+}
+
+.actions {
+    display: flex;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-top: 1rem;
+}
+
+.button {
+    border: none;
+    border-radius: 999px;
+    padding: 0.7rem 1rem;
+    background: #2d6a4f;
+    color: white;
+    cursor: pointer;
+}
+
+.button.secondary {
+    background: #8a5a44;
+}
+
+.editor,
+.code {
+    width: 100%;
+    min-height: 18rem;
+    padding: 0.95rem;
+    border-radius: 1rem;
+    border: 1px solid rgba(97, 73, 43, 0.14);
+    background: #fffdf9;
+    color: #201a16;
+}
+
+.code {
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow: auto;
+}
+
+.samples {
+    display: grid;
+    gap: 0.7rem;
+}
+
+.sample-button {
+    text-align: left;
+    border: 1px solid rgba(97, 73, 43, 0.14);
+    border-radius: 1rem;
+    background: #fffaf1;
+    padding: 0.9rem;
+    cursor: pointer;
+}
+
+.sample-button strong {
+    display: block;
+    margin-bottom: 0.2rem;
+}
+
+.meta-list {
+    display: grid;
+    gap: 0.4rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+@media (max-width: 960px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
+}

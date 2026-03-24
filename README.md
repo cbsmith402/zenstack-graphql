@@ -2,10 +2,41 @@
 
 `zenstack-graphql` is a standalone GraphQL adapter for ZenStack-style model metadata. It generates a framework-agnostic `GraphQLSchema` with Hasura-like CRUD roots, model-driven filters and ordering, aggregates, nested relation inserts, core insert/update/delete mutations, ZenStack procedure roots, and optional custom root resolvers.
 
-## Usage
+## Requirements
+
+- Node.js `>=18.17`
+- `graphql` `^16.11.0` as a peer dependency
+- ZenStack V3 schema metadata and a request-scoped ZenStack client
+
+## Install
+
+```bash
+npm install zenstack-graphql graphql
+```
+
+## Choose Your Surface
+
+Use the lowest-level API that matches your app:
+
+- `zenstack-graphql/core`
+  - For direct schema generation and custom GraphQL server wiring
+- `zenstack-graphql/server`
+  - For the framework-agnostic transport handler
+- `zenstack-graphql/next`
+  - For Next.js route handlers
+- `zenstack-graphql/express`
+  - For Express middleware
+- `zenstack-graphql/hono`
+  - For Hono handlers
+- `zenstack-graphql/hasura`
+  - For convenience helpers around `x-hasura-role` request extraction and schema slicing
+- `zenstack-graphql`
+  - Convenience root export that re-exports the full public surface
+
+## Core Usage
 
 ```ts
-import { createZenStackGraphQLSchema } from 'zenstack-graphql';
+import { createZenStackGraphQLSchema } from 'zenstack-graphql/core';
 
 const schema = createZenStackGraphQLSchema({
     schema: {
@@ -29,6 +60,11 @@ const schema = createZenStackGraphQLSchema({
 
 - `createZenStackGraphQLSchema({ schema, getClient, naming, features, relay, slicing, scalars, hooks, extensions })`
 - `createZenStackGraphQLSchemaFactory({ schema, getClient, getSlicing, getCacheKey, ... })`
+- `new GraphQLApiHandler({ schema, getClient, getContext, getSlicing, getCacheKey, ... })`
+- `createFetchGraphQLHandler(...)`
+- `createNextGraphQLHandler(...)`
+- `createExpressGraphQLMiddleware(...)`
+- `createHonoGraphQLHandler(...)`
 - `normalizeSchema(schema)`
 - `normalizeError(error)`
 
@@ -53,6 +89,148 @@ The generated schema uses Hasura-like defaults:
 - Relation aggregate `order_by` on parent collections is currently supported only for `count`, matching the documented ORM `orderBy: { relation: { _count: ... } }` shape
 - `distinct_on` is generated only for providers where the ORM supports `distinct`
 - `relay.enabled` adds an opt-in Relay query layer with `<models>_connection`, nested `<relation>_connection`, and `node(id:)`
+
+## Server Adapters
+
+The low-level schema factory is still available, but the package now also includes a ZenStack-style
+`api handler + server adapter` layer so you can integrate GraphQL the same way ZenStack's REST and
+RPC services integrate with different server frameworks.
+
+Use `GraphQLApiHandler` when you want a framework-agnostic transport boundary:
+
+```ts
+import { GraphQLApiHandler } from 'zenstack-graphql';
+
+const handler = new GraphQLApiHandler({
+    schema,
+    async getClient(request) {
+        return request.db;
+    },
+});
+
+const response = await handler.handle({
+    method: 'POST',
+    request: { db },
+    body: {
+        query: 'query { users { id name } }',
+    },
+});
+```
+
+Or use the thin framework adapters directly.
+
+### Next.js
+
+```ts
+import { createNextGraphQLHandler } from 'zenstack-graphql/next';
+
+export const POST = createNextGraphQLHandler({
+    schema,
+    async getClient(request) {
+        return getZenStackClientFromRequest(request);
+    },
+    getContext(request) {
+        return {
+            role: request.headers.get('x-hasura-role') ?? 'admin',
+        };
+    },
+});
+```
+
+### Express
+
+```ts
+import express from 'express';
+import { createExpressGraphQLMiddleware } from 'zenstack-graphql/express';
+
+const app = express();
+app.use(express.json());
+
+app.use(
+    '/api/graphql',
+    createExpressGraphQLMiddleware({
+        schema,
+        async getClient(req) {
+            return getZenStackClientFromRequest(req);
+        },
+    })
+);
+```
+
+### Hono
+
+```ts
+import { Hono } from 'hono';
+import { createHonoGraphQLHandler } from 'zenstack-graphql/hono';
+
+const app = new Hono();
+const graphql = createHonoGraphQLHandler({
+    schema,
+    async getClient(request) {
+        return getZenStackClientFromRequest(request);
+    },
+});
+
+app.all('/api/graphql', (c) => graphql(c));
+```
+
+### Transport Notes
+
+The current adapter layer supports:
+
+- fetch / Web `Request` handlers
+- Next.js route handlers
+- Express middleware
+- Hono handlers
+
+All of them share the same core execution path, including request-wide mutation transactions,
+Relay support, procedures, extensions, and role-aware schema slicing.
+
+## Hasura Helpers
+
+If you want a lightweight compatibility layer for Hasura-style role headers, use
+`createHasuraCompatibilityHelpers`.
+
+```ts
+import { createHasuraCompatibilityHelpers } from 'zenstack-graphql/hasura';
+
+const hasura = createHasuraCompatibilityHelpers<Request, 'admin' | 'user'>({
+    defaultRole: 'admin',
+    getHeaders(request) {
+        return request.headers;
+    },
+    normalizeRole(role) {
+        return role?.toLowerCase() === 'user' ? 'user' : 'admin';
+    },
+    getSlicing(role) {
+        return role === 'user'
+            ? {
+                  models: {
+                      user: {
+                          excludedFields: ['age'],
+                      },
+                  },
+              }
+            : undefined;
+    },
+});
+
+createNextGraphQLHandler({
+    schema,
+    getClient: getZenStackClientFromRequest,
+    getContext: hasura.getContext,
+    getSlicing: hasura.getSlicing,
+    getCacheKey: hasura.getCacheKey,
+});
+```
+
+That helper intentionally stays small. It standardizes:
+
+- the `x-hasura-role` header name
+- role extraction from `Headers` or Node-style header objects
+- default-role fallback
+- request-to-context mapping
+- role-based schema slicing and cache keys
 
 ## Compatibility Snapshot
 
@@ -90,6 +268,7 @@ Intentionally unsupported right now:
 - Any feature that would require in-memory query semantics instead of safe ORM lowering
 
 See [docs/compatibility.md](/Users/cbsmith/Projects/zenstack-graphql/docs/compatibility.md) for the longer compatibility matrix and [docs/migration.md](/Users/cbsmith/Projects/zenstack-graphql/docs/migration.md) for a practical Hasura migration checklist.
+Release notes for the current adapter surface are in [CHANGELOG.md](/Users/cbsmith/Projects/zenstack-graphql/CHANGELOG.md).
 
 ## Role-aware schemas
 
@@ -99,7 +278,7 @@ from request context.
 ```ts
 import {
     createZenStackGraphQLSchemaFactory,
-} from 'zenstack-graphql';
+} from 'zenstack-graphql/core';
 
 const factory = createZenStackGraphQLSchemaFactory({
     schema,
@@ -134,17 +313,27 @@ const result = await factory.execute({
 - Delegates are expected to look Prisma-like (`findMany`, `findUnique`, `aggregate`, `create`, `update`, `delete`, and optional bulk variants).
 - Provider capabilities are normalized from the schema metadata so backend-specific filter behavior can be gated cleanly as the adapter grows.
 - ZenStack custom procedures are supported; database-native SQL routines are not auto-generated today.
+- The root `zenstack-graphql` entrypoint is a convenience export; framework-specific subpaths are the cleaner long-term import surface for apps and examples.
 
-## Next.js Demo
+## Example Apps
 
-A runnable sample app lives in `examples/nextjs-demo`.
+The repository now includes three runnable examples:
 
-It now uses a real ZenStack schema at `examples/nextjs-demo/zenstack/schema.zmodel`, generates the
-typed ZenStack schema with `zenstack generate`, boots a SQLite database, and serves the local
-GraphQL adapter through a Next.js API route. The demo also supports Hasura-style role selection
-with the `x-hasura-role` header and swaps between cached pruned schemas in the browser.
+- `examples/nextjs-demo`
+  - Full browser playground with schema viewer, seeded data panel, role switching, and sample operations
+- `examples/express-demo`
+  - Minimal Express server using `createExpressGraphQLMiddleware`
+- `examples/hono-demo`
+  - Minimal Hono server using `createHonoGraphQLHandler`
+- `examples/tanstack-start-demo`
+  - TanStack Start app using server routes and the fetch-based adapter
 
-The playground includes examples for:
+All three examples use a real ZenStack schema, generate local metadata with `zenstack generate`,
+boot a SQLite database, and support Hasura-style role selection via the `x-hasura-role` header.
+
+### Next.js
+
+The Next.js playground includes examples for:
 
 - Nested reads and aggregates
 - CRUD mutations, nested inserts, and `on_conflict`
@@ -164,4 +353,46 @@ Or from the repo root:
 
 ```bash
 npm run demo:dev
+```
+
+### Express
+
+```bash
+cd examples/express-demo
+npm install
+npm run dev
+```
+
+Or from the repo root:
+
+```bash
+npm run demo:express:dev
+```
+
+### Hono
+
+```bash
+cd examples/hono-demo
+npm install
+npm run dev
+```
+
+Or from the repo root:
+
+```bash
+npm run demo:hono:dev
+```
+
+### TanStack Start
+
+```bash
+cd examples/tanstack-start-demo
+npm install
+npm run dev
+```
+
+Or from the repo root:
+
+```bash
+npm run demo:tanstack:dev
 ```
