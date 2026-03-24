@@ -5,6 +5,14 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cbsmith402/zenstack-graphql.git"
+  },
+  "homepage": "https://github.com/cbsmith402/zenstack-graphql#readme",
+  "bugs": {
+    "url": "https://github.com/cbsmith402/zenstack-graphql/issues"
+  },
   "engines": {
     "node": ">=18.17"
   },
@@ -73,8 +81,12 @@
     "README.md",
     "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "ci:check": "npm run test && npm run typecheck && npm run build && npm pack --dry-run --cache .npm-cache",
     "hasura:import": "node --import tsx scripts/import-hasura-to-zmodel.ts",
     "demo:express:dev": "npm run dev --prefix examples/express-demo",
     "demo:express:typecheck": "npm run typecheck --prefix examples/express-demo",
@@ -85,6 +97,7 @@
     "demo:tanstack:dev": "npm run dev --prefix examples/tanstack-start-demo",
     "demo:tanstack:typecheck": "npm run typecheck --prefix examples/tanstack-start-demo",
     "demo:typecheck": "npm run typecheck --prefix examples/nextjs-demo",
+    "prepublishOnly": "npm run ci:check",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/**/*.test.ts"
   },
