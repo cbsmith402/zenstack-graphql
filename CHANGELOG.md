@@ -17,7 +17,9 @@ Initial public release of the standalone ZenStack V3 GraphQL adapter.
 - optional Relay query layer with root and nested connections plus `node(id:)`
 - framework-agnostic `GraphQLApiHandler`
 - server adapters for fetch/Web `Request`, Next.js, Express, and Hono
-- SQLite-backed Next.js demo app and regression test suite
+- Hasura compatibility helpers for `x-hasura-role` request extraction and slicing
+- SQLite-backed demo apps for Next.js, Express, Hono, and TanStack Start
+- regression test suite
 
 ### Compatibility Notes
 

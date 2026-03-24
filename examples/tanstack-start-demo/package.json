@@ -1,0 +1,37 @@
+{
+  "name": "zenstack-graphql-tanstack-start-demo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "adapter:build": "npm run build --prefix ../..",
+    "build": "npm run adapter:build && npm run zen:generate && vite build",
+    "dev": "npm run adapter:build && npm run zen:generate && vite dev",
+    "typecheck": "npm run adapter:build && npm run zen:generate && tsc --noEmit",
+    "zen:generate": "zenstack generate --no-tips"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "^1.168.3",
+    "@tanstack/react-start": "^1.167.5",
+    "@zenstackhq/orm": "^3.4.6",
+    "better-sqlite3": "^12.8.0",
+    "graphql": "^16.11.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zenstack-graphql": "file:../.."
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.5.2",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "^5.1.0",
+    "@zenstackhq/cli": "^3.4.6",
+    "typescript": "^5.9.2",
+    "vite": "^8.0.2"
+  },
+  "zenstack": {
+    "schema": "./zenstack/schema.zmodel",
+    "output": "./zenstack"
+  }
+}

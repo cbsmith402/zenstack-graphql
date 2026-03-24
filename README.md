@@ -28,6 +28,8 @@ Use the lowest-level API that matches your app:
   - For Express middleware
 - `zenstack-graphql/hono`
   - For Hono handlers
+- `zenstack-graphql/hasura`
+  - For convenience helpers around `x-hasura-role` request extraction and schema slicing
 - `zenstack-graphql`
   - Convenience root export that re-exports the full public surface
 
@@ -184,6 +186,52 @@ The current adapter layer supports:
 All of them share the same core execution path, including request-wide mutation transactions,
 Relay support, procedures, extensions, and role-aware schema slicing.
 
+## Hasura Helpers
+
+If you want a lightweight compatibility layer for Hasura-style role headers, use
+`createHasuraCompatibilityHelpers`.
+
+```ts
+import { createHasuraCompatibilityHelpers } from 'zenstack-graphql/hasura';
+
+const hasura = createHasuraCompatibilityHelpers<Request, 'admin' | 'user'>({
+    defaultRole: 'admin',
+    getHeaders(request) {
+        return request.headers;
+    },
+    normalizeRole(role) {
+        return role?.toLowerCase() === 'user' ? 'user' : 'admin';
+    },
+    getSlicing(role) {
+        return role === 'user'
+            ? {
+                  models: {
+                      user: {
+                          excludedFields: ['age'],
+                      },
+                  },
+              }
+            : undefined;
+    },
+});
+
+createNextGraphQLHandler({
+    schema,
+    getClient: getZenStackClientFromRequest,
+    getContext: hasura.getContext,
+    getSlicing: hasura.getSlicing,
+    getCacheKey: hasura.getCacheKey,
+});
+```
+
+That helper intentionally stays small. It standardizes:
+
+- the `x-hasura-role` header name
+- role extraction from `Headers` or Node-style header objects
+- default-role fallback
+- request-to-context mapping
+- role-based schema slicing and cache keys
+
 ## Compatibility Snapshot
 
 This adapter is aiming for "mostly painless for common Hasura CRUD use cases", not full Hasura platform parity.
@@ -277,6 +325,8 @@ The repository now includes three runnable examples:
   - Minimal Express server using `createExpressGraphQLMiddleware`
 - `examples/hono-demo`
   - Minimal Hono server using `createHonoGraphQLHandler`
+- `examples/tanstack-start-demo`
+  - TanStack Start app using server routes and the fetch-based adapter
 
 All three examples use a real ZenStack schema, generate local metadata with `zenstack generate`,
 boot a SQLite database, and support Hasura-style role selection via the `x-hasura-role` header.
@@ -331,4 +381,18 @@ Or from the repo root:
 
 ```bash
 npm run demo:hono:dev
+```
+
+### TanStack Start
+
+```bash
+cd examples/tanstack-start-demo
+npm install
+npm run dev
+```
+
+Or from the repo root:
+
+```bash
+npm run demo:tanstack:dev
 ```

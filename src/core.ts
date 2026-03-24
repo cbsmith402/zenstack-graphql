@@ -4,6 +4,11 @@ export { createZenStackGraphQLSchemaFactory } from './schema-factory.js';
 export { createZenStackGraphQLSchema } from './schema.js';
 export { normalizeSchema } from './metadata.js';
 export { normalizeError } from './errors.js';
+export {
+    HASURA_ROLE_HEADER,
+    createHasuraCompatibilityHelpers,
+    getHasuraHeaderValue,
+} from './hasura.js';
 export type {
     CreateZenStackGraphQLSchemaFactoryOptions,
     ZenStackGraphQLSchemaFactory,
@@ -37,3 +42,8 @@ export type {
     ZenStackGraphQLExecutionMetadata,
     ZenStackSchemaLike,
 } from './types.js';
+export type {
+    CreateHasuraCompatibilityHelpersOptions,
+    HasuraHeadersLike,
+    HasuraRoleContext,
+} from './hasura.js';

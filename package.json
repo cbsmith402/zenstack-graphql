@@ -37,6 +37,10 @@
       "types": "./dist/hono.d.ts",
       "import": "./dist/hono.js"
     },
+    "./hasura": {
+      "types": "./dist/hasura.d.ts",
+      "import": "./dist/hasura.js"
+    },
     "./package.json": "./package.json"
   },
   "typesVersions": {
@@ -58,6 +62,9 @@
       ],
       "hono": [
         "./dist/hono.d.ts"
+      ],
+      "hasura": [
+        "./dist/hasura.d.ts"
       ]
     }
   },
@@ -74,6 +81,8 @@
     "demo:dev": "npm run dev --prefix examples/nextjs-demo",
     "demo:hono:dev": "npm run dev --prefix examples/hono-demo",
     "demo:hono:typecheck": "npm run typecheck --prefix examples/hono-demo",
+    "demo:tanstack:dev": "npm run dev --prefix examples/tanstack-start-demo",
+    "demo:tanstack:typecheck": "npm run typecheck --prefix examples/tanstack-start-demo",
     "demo:typecheck": "npm run typecheck --prefix examples/nextjs-demo",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "node --import tsx --test test/**/*.test.ts"
