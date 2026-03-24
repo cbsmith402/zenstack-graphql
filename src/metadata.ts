@@ -47,6 +47,27 @@ function hasFieldAttribute(
     );
 }
 
+function getFieldNativeType(field: Record<string, unknown>) {
+    if (typeof field.nativeType === 'string' && field.nativeType.length > 0) {
+        return field.nativeType;
+    }
+
+    if (!Array.isArray(field.attributes)) {
+        return undefined;
+    }
+
+    for (const attribute of field.attributes) {
+        if (!isPlainObject(attribute) || typeof attribute.name !== 'string') {
+            continue;
+        }
+        if (attribute.name.startsWith('@db.')) {
+            return attribute.name.slice(4);
+        }
+    }
+
+    return undefined;
+}
+
 function normalizeField(
     fieldName: string,
     field: FieldDefinition | Record<string, unknown>,
@@ -103,6 +124,10 @@ function normalizeField(
             ('isComputed' in generatedField && typeof generatedField.isComputed === 'boolean'
                 ? generatedField.isComputed
                 : hasFieldAttribute(generatedField, '@computed')),
+        nativeType:
+            ('nativeType' in generatedField && typeof generatedField.nativeType === 'string'
+                ? generatedField.nativeType
+                : getFieldNativeType(generatedField)),
         foreignKeyFields:
             ('foreignKeyFields' in generatedField && Array.isArray(generatedField.foreignKeyFields)
                 ? (generatedField.foreignKeyFields as string[])
@@ -261,6 +286,10 @@ function normalizeProcedureParams(
                 ('isNullable' in raw && typeof raw.isNullable === 'boolean'
                     ? raw.isNullable
                     : Boolean(raw.optional)),
+            nativeType:
+                ('nativeType' in raw && typeof raw.nativeType === 'string'
+                    ? raw.nativeType
+                    : getFieldNativeType(raw)),
         };
     });
 }

@@ -13,7 +13,7 @@ import {
     ValueNode,
 } from 'graphql';
 
-import type { ScalarType } from './types.js';
+import type { ScalarAliasConfig, ScalarType } from './types.js';
 
 function parseJsonLiteral(ast: ValueNode): unknown {
     switch (ast.kind) {
@@ -123,11 +123,58 @@ const DEFAULT_SCALARS: Record<ScalarType, GraphQLScalarType> = {
     BigInt: BigIntScalar,
 };
 
+const HASURA_SCALAR_ALIASES: ScalarAliasConfig = {
+    defaults: {
+        DateTime: 'timestamptz',
+        Decimal: 'numeric',
+        Json: 'jsonb',
+        BigInt: 'bigint',
+    },
+    nativeTypes: {
+        Uuid: 'uuid',
+        Citext: 'citext',
+        Timestamp: 'timestamp',
+        Date: 'date',
+    },
+};
+
+const ALIASED_SCALAR_CACHE = new Map<string, GraphQLScalarType>();
+
+function createAliasedScalar(baseScalar: GraphQLScalarType, aliasName: string) {
+    const cacheKey = `${baseScalar.name}:${aliasName}`;
+    const existing = ALIASED_SCALAR_CACHE.get(cacheKey);
+    if (existing) {
+        return existing;
+    }
+
+    const aliasedScalar = new GraphQLScalarType({
+        ...baseScalar.toConfig(),
+        name: aliasName,
+    });
+    ALIASED_SCALAR_CACHE.set(cacheKey, aliasedScalar);
+    return aliasedScalar;
+}
+
+export function resolveScalarAliases(config?: ScalarAliasConfig | 'hasura') {
+    if (!config) {
+        return undefined;
+    }
+    if (config === 'hasura') {
+        return HASURA_SCALAR_ALIASES;
+    }
+    return config;
+}
+
 export function getScalarType(
     scalar: ScalarType,
-    overrides?: Partial<Record<ScalarType, GraphQLScalarType>>
+    overrides?: Partial<Record<ScalarType, GraphQLScalarType>>,
+    aliasName?: string
 ) {
-    return overrides?.[scalar] ?? DEFAULT_SCALARS[scalar];
+    const scalarType = overrides?.[scalar] ?? DEFAULT_SCALARS[scalar];
+    if (!aliasName || scalarType.name === aliasName) {
+        return scalarType;
+    }
+    return createAliasedScalar(scalarType, aliasName);
 }
 
 export function maybeWrapList<TType extends GraphQLInputType | GraphQLOutputType>(

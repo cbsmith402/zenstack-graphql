@@ -30,6 +30,7 @@ export interface BaseFieldDefinition {
     isReadOnly?: boolean;
     isComputed?: boolean;
     isInternal?: boolean;
+    nativeType?: string;
     description?: string;
 }
 
@@ -165,6 +166,7 @@ export interface NormalizedProcedureParamDefinition {
     kind: ProcedureTypeKind;
     isList?: boolean;
     isNullable?: boolean;
+    nativeType?: string;
 }
 
 export interface NormalizedProcedureDefinition {
@@ -328,7 +330,12 @@ export interface NamingStrategy {
     typeName(modelName: string): string;
 }
 
-export type NamingConfig = 'hasura' | 'prisma' | Partial<NamingStrategy>;
+export type NamingConfig = 'hasura' | 'hasura-table' | 'prisma' | Partial<NamingStrategy>;
+
+export interface ScalarAliasConfig {
+    defaults?: Partial<Record<ScalarType, string>>;
+    nativeTypes?: Record<string, string>;
+}
 
 export type RootFieldConfig<TClient = unknown, TContext = unknown> = Omit<
     GraphQLFieldConfig<unknown, TContext>,
@@ -356,6 +363,7 @@ export interface CreateZenStackGraphQLSchemaOptions<TClient = unknown, TContext 
     relay?: RelayOptions;
     slicing?: SchemaSlicingConfig;
     scalars?: Partial<Record<ScalarType, GraphQLScalarType>>;
+    scalarAliases?: ScalarAliasConfig | 'hasura';
     hooks?: ResolverHooks<TContext>;
     extensions?: RootFieldExtensions<TClient, TContext>;
 }

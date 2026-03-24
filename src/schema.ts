@@ -36,7 +36,7 @@ import {
     isNumericScalar,
     normalizeSchema,
 } from './metadata.js';
-import { getScalarType, maybeWrapList } from './scalars.js';
+import { getScalarType, maybeWrapList, resolveScalarAliases } from './scalars.js';
 import type {
     CreateZenStackGraphQLSchemaOptions,
     FeatureFlags,
@@ -54,6 +54,7 @@ import type {
     ResolverInvocation,
     RootFieldConfig,
     ScalarType,
+    ScalarAliasConfig,
     SchemaCrudOperation,
     SchemaFilterKind,
     SchemaSlicingConfig,
@@ -107,42 +108,54 @@ function toHasuraCollectionName(model: NormalizedModelDefinition) {
     return pluralize(lowerCamelCase(model.dbName ?? model.name));
 }
 
+function toHasuraTableRootName(model: NormalizedModelDefinition) {
+    return lowerCamelCase(model.dbName ?? model.name);
+}
+
 function resolveNamingStrategy(config?: NamingConfig): NamingStrategy {
-    const defaults: NamingStrategy = {
+    const createHasuraStrategy = (
+        rootName: (model: NormalizedModelDefinition) => string
+    ): NamingStrategy => ({
         queryMany(model) {
-            return toHasuraCollectionName(model);
+            return rootName(model);
         },
         queryByPk(model) {
-            return `${toHasuraCollectionName(model)}_by_pk`;
+            return `${rootName(model)}_by_pk`;
         },
         queryAggregate(model) {
-            return `${toHasuraCollectionName(model)}_aggregate`;
+            return `${rootName(model)}_aggregate`;
         },
         insertMany(model) {
-            return `insert_${toHasuraCollectionName(model)}`;
+            return `insert_${rootName(model)}`;
         },
         insertOne(model) {
-            return `insert_${toHasuraCollectionName(model)}_one`;
+            return `insert_${rootName(model)}_one`;
         },
         updateMany(model) {
-            return `update_${toHasuraCollectionName(model)}`;
+            return `update_${rootName(model)}`;
         },
         updateByPk(model) {
-            return `update_${toHasuraCollectionName(model)}_by_pk`;
+            return `update_${rootName(model)}_by_pk`;
         },
         deleteMany(model) {
-            return `delete_${toHasuraCollectionName(model)}`;
+            return `delete_${rootName(model)}`;
         },
         deleteByPk(model) {
-            return `delete_${toHasuraCollectionName(model)}_by_pk`;
+            return `delete_${rootName(model)}_by_pk`;
         },
         typeName(modelName) {
             return modelName;
         },
-    };
+    });
+
+    const defaults = createHasuraStrategy(toHasuraCollectionName);
 
     if (!config || config === 'hasura') {
         return defaults;
+    }
+
+    if (config === 'hasura-table') {
+        return createHasuraStrategy(toHasuraTableRootName);
     }
 
     if (config === 'prisma') {
@@ -364,6 +377,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly features: Required<FeatureFlags>;
     private readonly naming: NamingStrategy;
     private readonly slicing: SchemaSlicingConfig | undefined;
+    private readonly scalarAliases: ScalarAliasConfig | undefined;
     private readonly providerCapabilities: ProviderCapabilities;
     private readonly relayEnabled: boolean;
     private readonly objectTypes = new Map<string, GraphQLObjectType>();
@@ -403,6 +417,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         this.features = { ...DEFAULT_FEATURES, ...options.features };
         this.naming = resolveNamingStrategy(options.naming);
         this.slicing = options.slicing;
+        this.scalarAliases = resolveScalarAliases(options.scalarAliases);
         this.providerCapabilities = getProviderCapabilities(this.normalizedSchema);
         this.relayEnabled = options.relay?.enabled === true;
     }
@@ -425,6 +440,40 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
     private supportsScalarListFilters() {
         return this.providerCapabilities.supportsScalarListFilters;
+    }
+
+    private getNativeTypeAlias(nativeType: string | undefined) {
+        if (!nativeType) {
+            return undefined;
+        }
+
+        const normalizedNativeType = nativeType.toLowerCase();
+        return Object.entries(this.scalarAliases?.nativeTypes ?? {}).find(
+            ([key]) => key.toLowerCase() === normalizedNativeType
+        )?.[1];
+    }
+
+    private getScalarAliasName(
+        scalar: ScalarType,
+        nativeType?: string
+    ) {
+        return this.getNativeTypeAlias(nativeType) ?? this.scalarAliases?.defaults?.[scalar];
+    }
+
+    private getNamedScalarType(scalar: ScalarType) {
+        return getScalarType(
+            scalar,
+            this.options.scalars,
+            this.getScalarAliasName(scalar)
+        );
+    }
+
+    private getFieldScalarType(field: Pick<NormalizedFieldDefinition, 'type' | 'nativeType'>) {
+        return getScalarType(
+            field.type as ScalarType,
+            this.options.scalars,
+            this.getScalarAliasName(field.type as ScalarType, field.nativeType)
+        );
     }
 
     private getConfiguredNames(names: string[] | undefined) {
@@ -929,7 +978,14 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     }
 
     private getProcedureArgumentType(param: NormalizedProcedureParamDefinition): GraphQLInputType {
-        const baseType = this.getNamedInputType(param.type);
+        const baseType =
+            param.kind === 'scalar'
+                ? getScalarType(
+                      param.type as ScalarType,
+                      this.options.scalars,
+                      this.getScalarAliasName(param.type as ScalarType, param.nativeType)
+                  )
+                : this.getNamedInputType(param.type);
         return maybeWrapList(baseType, param.isList, param.isNullable) as GraphQLInputType;
     }
 
@@ -1121,7 +1177,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         if (this.normalizedSchema.typeDefMap.has(typeName)) {
             return this.getTypeDefObjectType(this.getTypeDef(typeName));
         }
-        return getScalarType(typeName as ScalarType, this.options.scalars);
+        return this.getNamedScalarType(typeName as ScalarType);
     }
 
     private getNamedInputType(typeName: string): GraphQLInputType {
@@ -1134,7 +1190,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         if (this.normalizedSchema.typeDefMap.has(typeName)) {
             return this.getTypeDefInputType(this.getTypeDef(typeName));
         }
-        return getScalarType(typeName as ScalarType, this.options.scalars);
+        return this.getNamedScalarType(typeName as ScalarType);
     }
 
     private getFieldOutputType(field: NormalizedFieldDefinition): GraphQLOutputType {
@@ -1164,7 +1220,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         return maybeWrapList(
-            getScalarType(field.type as ScalarType, this.options.scalars),
+            this.getFieldScalarType(field),
             field.isList,
             field.isNullable
         ) as GraphQLOutputType;
@@ -1193,7 +1249,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         const baseType =
             field.kind === 'enum'
                 ? this.getEnumType(field.type)
-                : getScalarType(field.type as ScalarType, this.options.scalars);
+                : this.getFieldScalarType(field);
         return maybeWrapList(
             baseType as GraphQLInputType,
             field.isList,
@@ -1219,7 +1275,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 const scalarType =
                     field.kind === 'enum'
                         ? this.getEnumType(field.type)
-                        : getScalarType(field.type as ScalarType, this.options.scalars);
+                        : this.getFieldScalarType(field);
                 const baseType =
                     field.isList
                         ? new GraphQLList(new GraphQLNonNull(scalarType))
@@ -1231,14 +1287,14 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                               _neq: { type: baseType },
                               _in: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
                               _nin: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
-                              _is_null: { type: getScalarType('Boolean', this.options.scalars) },
+                              _is_null: { type: this.getNamedScalarType('Boolean') },
                               ...(field.kind === 'scalar' && field.type === 'Json'
                                   ? {
                                         equals: {
-                                            type: getScalarType('Json', this.options.scalars),
+                                            type: this.getNamedScalarType('Json'),
                                         },
                                         not: {
-                                            type: getScalarType('Json', this.options.scalars),
+                                            type: this.getNamedScalarType('Json'),
                                         },
                                     }
                                   : {}),
@@ -1271,9 +1327,9 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     fields.string_contains = { type: GraphQLString };
                     fields.string_starts_with = { type: GraphQLString };
                     fields.string_ends_with = { type: GraphQLString };
-                    fields.array_contains = { type: getScalarType('Json', this.options.scalars) };
-                    fields.array_starts_with = { type: getScalarType('Json', this.options.scalars) };
-                    fields.array_ends_with = { type: getScalarType('Json', this.options.scalars) };
+                    fields.array_contains = { type: this.getNamedScalarType('Json') };
+                    fields.array_starts_with = { type: this.getNamedScalarType('Json') };
+                    fields.array_ends_with = { type: this.getNamedScalarType('Json') };
                     if (this.supportsJsonFilterMode()) {
                         fields.mode = { type: QUERY_MODE_ENUM };
                     }
@@ -1287,7 +1343,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     fields.hasSome = {
                         type: new GraphQLList(new GraphQLNonNull(scalarType)),
                     };
-                    fields.isEmpty = { type: getScalarType('Boolean', this.options.scalars) };
+                    fields.isEmpty = { type: this.getNamedScalarType('Boolean') };
                 }
 
                 if (
@@ -1340,7 +1396,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 const scalarType =
                     field.kind === 'enum'
                         ? this.getEnumType(field.type)
-                        : getScalarType(field.type as ScalarType, this.options.scalars);
+                        : this.getFieldScalarType(field);
                 const baseType = field.isList
                     ? new GraphQLList(new GraphQLNonNull(scalarType))
                     : scalarType;
@@ -1349,7 +1405,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     _neq: { type: baseType },
                     _in: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
                     _nin: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
-                    _is_null: { type: getScalarType('Boolean', this.options.scalars) },
+                    _is_null: { type: this.getNamedScalarType('Boolean') },
                 };
 
                 if (!field.isList && field.kind === 'scalar' && isComparableScalar(field.type)) {
@@ -1602,7 +1658,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 for (const field of this.getMutableFields(model)) {
                     if (field.kind === 'scalar' && isNumericScalar(field.type)) {
                         fields[field.name] = {
-                            type: getScalarType(field.type as ScalarType, this.options.scalars),
+                            type: this.getFieldScalarType(field),
                         };
                     }
                 }
@@ -1910,7 +1966,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             const baseType =
                 field.kind === 'enum'
                     ? this.getEnumType(field.type)
-                    : getScalarType(field.type as ScalarType, this.options.scalars);
+                    : this.getFieldScalarType(field);
             args[fieldName] = {
                 type: new GraphQLNonNull(baseType),
             };
@@ -2269,7 +2325,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                     }
 
                     fields[field.name] = {
-                        type: getScalarType(field.type as ScalarType, this.options.scalars),
+                        type: this.getFieldScalarType(field),
                     };
                 }
                 return fields;

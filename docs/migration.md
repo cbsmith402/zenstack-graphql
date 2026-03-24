@@ -27,10 +27,12 @@ This adapter is a good fit when you mainly use Hasura as:
 
 1. Start with a representative Hasura query set.
 2. Map your models into ZenStack and verify the generated CRUD roots.
-3. Replace role-specific introspection with schema factory slices keyed by request context.
-4. Move custom actions into ZenStack procedures where possible.
-5. Use `extensions.query` and `extensions.mutation` only for the operations that do not belong in ZModel.
-6. Keep a short incompatibility list for your team so unsupported Hasura features are visible early.
+3. If your existing documents use table-style root names, enable `naming: 'hasura-table'`.
+4. If your documents use Hasura/Postgres scalar names like `uuid`, `timestamptz`, or `jsonb`, enable `scalarAliases: 'hasura'`.
+5. Replace role-specific introspection with schema factory slices keyed by request context.
+6. Move custom actions into ZenStack procedures where possible.
+7. Use `extensions.query` and `extensions.mutation` only for the operations that do not belong in ZModel.
+8. Keep a short incompatibility list for your team so unsupported Hasura features are visible early.
 
 ## Suggested Validation Pass
 

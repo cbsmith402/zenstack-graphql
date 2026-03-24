@@ -7,6 +7,7 @@
 Supported:
 
 - List roots: `<models>`
+- Optional singular table roots through `naming: 'hasura-table'`, using `model.dbName` / `model.name` directly
 - Primary-key roots: `<models>_by_pk`
 - Aggregate roots: `<models>_aggregate`
 - Relay roots: `<models>_connection` and `node(id:)` when `relay.enabled` is on
@@ -16,9 +17,11 @@ Supported:
 - Filtering with Hasura-style comparison operators, relation filters, and provider-aware JSON operators
 - Ordering, including ORM-backed relation `count` ordering
 - Offset pagination via `limit` and `offset`
+- Optional Hasura/Postgres scalar aliases through `scalarAliases: 'hasura'`, including `timestamptz`, `jsonb`, `numeric`, `bigint`, and native-type aliases like `uuid` / `citext`
 
 Partially supported:
 
+- The default naming mode still pluralizes collection roots; use `hasura-table` if your existing documents are table-name based
 - `distinct_on`: generated only for providers where ZenStack exposes distinct support
 - Relation aggregate `order_by`: only `count` is supported today
 - Typed JSON filters: supported for typedef-backed scalar/object/list structures, but not arbitrary nested relations inside typedefs

@@ -33,6 +33,7 @@ export type {
     RootFieldConfig,
     RootFieldExtensions,
     ScalarFieldDefinition,
+    ScalarAliasConfig,
     ScalarType,
     SchemaCrudOperation,
     SchemaFilterKind,

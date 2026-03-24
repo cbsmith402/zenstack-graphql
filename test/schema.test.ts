@@ -47,6 +47,146 @@ test('generates Hasura-style root fields and types', async () => {
     assert.match(printed, /_nicontains: String/);
 });
 
+test('supports Hasura table-root naming for db-backed model names', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            models: {
+                IdentityOrganization: {
+                    dbName: 'identity_organization',
+                    fields: {
+                        id: { name: 'id', type: 'Int', id: true },
+                        legalName: { name: 'legalName', type: 'String' },
+                    },
+                    idFields: ['id'],
+                    uniqueFields: { id: { type: 'Int' } },
+                },
+            },
+        },
+        naming: 'hasura-table',
+        getClient: async () => ({
+            IdentityOrganization: {
+                async findMany() {
+                    return [];
+                },
+                async findUnique() {
+                    return null;
+                },
+                async aggregate() {
+                    return { _count: { _all: 0 } };
+                },
+            },
+            identityOrganization: {
+                async findMany() {
+                    return [];
+                },
+                async findUnique() {
+                    return null;
+                },
+                async aggregate() {
+                    return { _count: { _all: 0 } };
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /identity_organization\(where:/);
+    assert.match(printed, /identity_organization_by_pk\(id: Int!/);
+    assert.match(printed, /identity_organization_aggregate\(where:/);
+    assert.match(printed, /insert_identity_organization_one\(object: IdentityOrganization_insert_input!/);
+    assert.doesNotMatch(printed, /identity_organizations\(/);
+});
+
+test('supports Hasura scalar aliases for default and native DB scalar names', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        schema: {
+            models: {
+                IdentityOrganization: {
+                    dbName: 'identity_organization',
+                    fields: {
+                        id: {
+                            name: 'id',
+                            type: 'String',
+                            id: true,
+                            attributes: [{ name: '@db.Uuid' }],
+                        },
+                        slug: {
+                            name: 'slug',
+                            type: 'String',
+                            attributes: [{ name: '@db.Citext' }],
+                        },
+                        metadata: {
+                            name: 'metadata',
+                            type: 'Json',
+                            optional: true,
+                        },
+                        balance: {
+                            name: 'balance',
+                            type: 'Decimal',
+                        },
+                        externalCount: {
+                            name: 'externalCount',
+                            type: 'BigInt',
+                        },
+                        createdAt: {
+                            name: 'createdAt',
+                            type: 'DateTime',
+                        },
+                    },
+                    idFields: ['id'],
+                    uniqueFields: {
+                        id: { type: 'String' },
+                        slug: { type: 'String' },
+                    },
+                },
+            },
+        },
+        naming: 'hasura-table',
+        scalarAliases: 'hasura',
+        getClient: async () => ({
+            IdentityOrganization: {
+                async findMany() {
+                    return [];
+                },
+                async findUnique() {
+                    return null;
+                },
+                async aggregate() {
+                    return { _count: { _all: 0 } };
+                },
+            },
+            identityOrganization: {
+                async findMany() {
+                    return [];
+                },
+                async findUnique() {
+                    return null;
+                },
+                async aggregate() {
+                    return { _count: { _all: 0 } };
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /scalar uuid/);
+    assert.match(printed, /scalar citext/);
+    assert.match(printed, /scalar jsonb/);
+    assert.match(printed, /scalar numeric/);
+    assert.match(printed, /scalar bigint/);
+    assert.match(printed, /scalar timestamptz/);
+    assert.match(printed, /id: uuid!/);
+    assert.match(printed, /slug: citext!/);
+    assert.match(printed, /metadata: jsonb/);
+    assert.match(printed, /balance: numeric!/);
+    assert.match(printed, /externalCount: bigint!/);
+    assert.match(printed, /createdAt: timestamptz!/);
+    assert.match(printed, /input IdentityOrganization_insert_input[\s\S]*id: uuid/);
+    assert.match(printed, /input IdentityOrganization_insert_input[\s\S]*slug: citext/);
+    assert.match(printed, /input DateTime_comparison_exp[\s\S]*_eq: timestamptz/);
+});
+
 test('generates Relay types only when enabled', async () => {
     const { client } = createInMemoryClient();
     const disabledSchema = createZenStackGraphQLSchema({

@@ -58,7 +58,7 @@ const schema = createZenStackGraphQLSchema({
 
 ## Public API
 
-- `createZenStackGraphQLSchema({ schema, getClient, naming, features, relay, slicing, scalars, hooks, extensions })`
+- `createZenStackGraphQLSchema({ schema, getClient, naming, features, relay, slicing, scalars, scalarAliases, hooks, extensions })`
 - `createZenStackGraphQLSchemaFactory({ schema, getClient, getSlicing, getCacheKey, ... })`
 - `new GraphQLApiHandler({ schema, getClient, getContext, getSlicing, getCacheKey, ... })`
 - `createFetchGraphQLHandler(...)`
@@ -89,6 +89,31 @@ The generated schema uses Hasura-like defaults:
 - Relation aggregate `order_by` on parent collections is currently supported only for `count`, matching the documented ORM `orderBy: { relation: { _count: ... } }` shape
 - `distinct_on` is generated only for providers where the ORM supports `distinct`
 - `relay.enabled` adds an opt-in Relay query layer with `<models>_connection`, nested `<relation>_connection`, and `node(id:)`
+
+For closer compatibility with existing Hasura documents, two knobs are especially useful:
+
+- `naming: 'hasura-table'`
+  - Uses singular table-root names from `model.dbName` / `model.name`, such as `identity_organization`, `identity_organization_by_pk`, and `insert_identity_organization_one`
+- `scalarAliases: 'hasura'`
+  - Renames the generated GraphQL scalar surface to Hasura/Postgres-style names where safe:
+    - `DateTime -> timestamptz`
+    - `Decimal -> numeric`
+    - `Json -> jsonb`
+    - `BigInt -> bigint`
+    - native DB hints like `@db.Uuid -> uuid` and `@db.Citext -> citext`
+
+Example:
+
+```ts
+const schema = createZenStackGraphQLSchema({
+    schema: zenstackSchema,
+    naming: 'hasura-table',
+    scalarAliases: 'hasura',
+    async getClient(context) {
+        return context.db;
+    },
+});
+```
 
 ## Server Adapters
 
@@ -239,11 +264,13 @@ This adapter is aiming for "mostly painless for common Hasura CRUD use cases", n
 Supported well today:
 
 - Hasura-like list, `*_by_pk`, and `*_aggregate` query roots
+- Optional `naming: 'hasura-table'` mode for singular table-root compatibility with existing Hasura documents
 - Core insert, update, and delete mutation roots with `returning`
 - `on_conflict` on `insert_*` and `insert_*_one`
 - Nested relation inserts and the supported nested relation update shapes exposed by ZenStack ORM
 - Aggregates, relation aggregate fields, and parent `order_by` by relation `count`
 - Hasura-style filtering and ordering, including `_between`, relation `some` / `every` / `none`, and provider-gated `distinct_on`
+- Optional `scalarAliases: 'hasura'` mode for Hasura/Postgres scalar names like `uuid`, `timestamptz`, `jsonb`, `numeric`, `bigint`, and `citext`
 - ZenStack custom procedures as GraphQL roots
 - Manual custom root resolvers through `extensions`
 - Role-aware schema pruning through `slicing` or the schema factory
