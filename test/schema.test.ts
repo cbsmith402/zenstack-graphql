@@ -132,6 +132,10 @@ test('supports Hasura scalar aliases for default and native DB scalar names', as
                             name: 'createdAt',
                             type: 'DateTime',
                         },
+                        age: {
+                            name: 'age',
+                            type: 'Int',
+                        },
                     },
                     idFields: ['id'],
                     uniqueFields: {
@@ -185,6 +189,184 @@ test('supports Hasura scalar aliases for default and native DB scalar names', as
     assert.match(printed, /input IdentityOrganization_insert_input[\s\S]*id: uuid/);
     assert.match(printed, /input IdentityOrganization_insert_input[\s\S]*slug: citext/);
     assert.match(printed, /input DateTime_comparison_exp[\s\S]*_eq: timestamptz/);
+});
+
+test('supports hasura-compat preset for table roots and generated Hasura type names', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        compatibility: 'hasura-compat',
+        schema: {
+            models: {
+                IdentityOrganization: {
+                    dbName: 'identity_organization',
+                    fields: {
+                        id: {
+                            name: 'id',
+                            type: 'String',
+                            id: true,
+                            attributes: [{ name: '@db.Uuid' }],
+                        },
+                        slug: {
+                            name: 'slug',
+                            type: 'String',
+                            attributes: [{ name: '@db.Citext' }],
+                        },
+                        createdAt: {
+                            name: 'createdAt',
+                            type: 'DateTime',
+                        },
+                    },
+                    idFields: ['id'],
+                    uniqueFields: {
+                        id: { type: 'String' },
+                        slug: { type: 'String' },
+                    },
+                },
+            },
+        },
+        getClient: async () => ({
+            IdentityOrganization: {
+                async findMany() {
+                    return [];
+                },
+                async findUnique() {
+                    return null;
+                },
+                async aggregate() {
+                    return { _count: { _all: 0 } };
+                },
+            },
+            identityOrganization: {
+                async findMany() {
+                    return [];
+                },
+                async findUnique() {
+                    return null;
+                },
+                async aggregate() {
+                    return { _count: { _all: 0 } };
+                },
+            },
+        }),
+    });
+
+    const printed = printSchema(graphqlSchema);
+    assert.match(printed, /type identity_organization/);
+    assert.match(printed, /identity_organization\(where:/);
+    assert.match(printed, /input identity_organization_bool_exp/);
+    assert.match(printed, /input identity_organization_insert_input/);
+    assert.match(printed, /enum identity_organization_constraint/);
+    assert.match(printed, /input uuid_comparison_exp[\s\S]*_eq: uuid/);
+    assert.match(printed, /input citext_comparison_exp[\s\S]*_eq: citext/);
+    assert.match(printed, /input timestamptz_comparison_exp[\s\S]*_eq: timestamptz/);
+});
+
+test('validates Hasura-style variable type names under hasura-compat', async () => {
+    const graphqlSchema = createZenStackGraphQLSchema({
+        compatibility: 'hasura-compat',
+        schema: {
+            models: {
+                IdentityOrganization: {
+                    dbName: 'identity_organization',
+                    fields: {
+                        id: {
+                            name: 'id',
+                            type: 'String',
+                            id: true,
+                            attributes: [{ name: '@db.Uuid' }],
+                        },
+                        slug: {
+                            name: 'slug',
+                            type: 'String',
+                            attributes: [{ name: '@db.Citext' }],
+                        },
+                        age: {
+                            name: 'age',
+                            type: 'Int',
+                        },
+                    },
+                    idFields: ['id'],
+                    uniqueFields: {
+                        id: { type: 'String' },
+                        slug: { type: 'String' },
+                    },
+                },
+            },
+        },
+        getClient: async () => ({
+            IdentityOrganization: {
+                async findMany(args?: Record<string, unknown>) {
+                    assert.deepEqual(args?.where, {
+                        AND: [
+                            {
+                                id: {
+                                    equals: 'org_1',
+                                },
+                                slug: {
+                                    equals: 'acme',
+                                },
+                            },
+                        ],
+                    });
+                    return [{ id: 'org_1', slug: 'acme' }];
+                },
+                async findUnique() {
+                    return null;
+                },
+                async aggregate() {
+                    return { _count: { _all: 0 } };
+                },
+            },
+            identityOrganization: {
+                async findMany(args?: Record<string, unknown>) {
+                    assert.deepEqual(args?.where, {
+                        AND: [
+                            {
+                                id: {
+                                    equals: 'org_1',
+                                },
+                                slug: {
+                                    equals: 'acme',
+                                },
+                            },
+                        ],
+                    });
+                    return [{ id: 'org_1', slug: 'acme' }];
+                },
+                async findUnique() {
+                    return null;
+                },
+                async aggregate() {
+                    return { _count: { _all: 0 } };
+                },
+            },
+        }),
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query HasuraCompatTypes(
+                $where: identity_organization_bool_exp!
+                $id: uuid_comparison_exp!
+                $slug: citext_comparison_exp!
+            ) {
+                identity_organization(where: { _and: [$where, { id: $id, slug: $slug }] }) {
+                    id
+                    slug
+                }
+            }
+        `,
+        variableValues: {
+            where: {},
+            id: { _eq: 'org_1' },
+            slug: { _eq: 'acme' },
+        },
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        identity_organization: [{ id: 'org_1', slug: 'acme' }],
+    });
 });
 
 test('generates Relay types only when enabled', async () => {
@@ -1062,6 +1244,82 @@ test('supports distinct_on, aggregate count args, and relation aggregate fields'
             },
         },
     });
+});
+
+test('supports Hasura aggregate count predicates through ORM-backed relation filters', async () => {
+    const { client } = createInMemoryClient({
+        users: [
+            { id: 1, name: 'Ada', age: 34, role: 'ADMIN' },
+            { id: 2, name: 'Ben', age: 19, role: 'USER' },
+            { id: 3, name: 'Cara', age: 27, role: 'USER' },
+        ],
+    });
+    const graphqlSchema = createZenStackGraphQLSchema({
+        compatibility: 'hasura-compat',
+        schema,
+        getClient: async () => client,
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                empty: user(
+                    where: { posts_aggregate: { count: { predicate: { _eq: 0 } } } }
+                    order_by: [{ id: asc }]
+                ) {
+                    id
+                    name
+                }
+                active: user(
+                    where: {
+                        posts_aggregate: {
+                            count: {
+                                predicate: { _gt: 0 }
+                                filter: { views: { _gte: 8 } }
+                            }
+                        }
+                    }
+                    order_by: [{ id: asc }]
+                ) {
+                    id
+                    name
+                }
+            }
+        `,
+    });
+
+    assert.equal(result.errors, undefined);
+    assert.deepEqual(toPlain(result.data), {
+        empty: [{ id: 3, name: 'Cara' }],
+        active: [
+            { id: 1, name: 'Ada' },
+            { id: 2, name: 'Ben' },
+        ],
+    });
+});
+
+test('rejects unsupported Hasura aggregate count predicates with BAD_USER_INPUT', async () => {
+    const { client } = createInMemoryClient();
+    const graphqlSchema = createZenStackGraphQLSchema({
+        compatibility: 'hasura-compat',
+        schema,
+        getClient: async () => client,
+    });
+
+    const result = await graphql({
+        schema: graphqlSchema,
+        source: `
+            query {
+                user(where: { posts_aggregate: { count: { predicate: { _eq: 2 } } } }) {
+                    id
+                }
+            }
+        `,
+    });
+
+    assert.ok(result.errors);
+    assert.equal(result.errors[0]?.extensions?.code, 'BAD_USER_INPUT');
 });
 
 test('supports extended string negation operators', async () => {

@@ -257,6 +257,8 @@ export interface RelayOptions {
     enabled?: boolean;
 }
 
+export type CompatibilityMode = 'hasura-compat';
+
 export interface GraphQLHandlerRequest<TRequest = unknown> {
     method: string;
     request: TRequest;
@@ -358,6 +360,7 @@ export interface RootFieldExtensions<TClient = unknown, TContext = unknown> {
 export interface CreateZenStackGraphQLSchemaOptions<TClient = unknown, TContext = unknown> {
     schema: ZenStackSchemaLike | ModelDefinition[];
     getClient(context: TContext): TClient | Promise<TClient>;
+    compatibility?: CompatibilityMode;
     naming?: NamingConfig;
     features?: FeatureFlags;
     relay?: RelayOptions;

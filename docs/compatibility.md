@@ -7,6 +7,7 @@
 Supported:
 
 - List roots: `<models>`
+- Optional `compatibility: 'hasura-compat'` preset that bundles the safe Hasura-oriented naming and scalar compatibility settings
 - Optional singular table roots through `naming: 'hasura-table'`, using `model.dbName` / `model.name` directly
 - Primary-key roots: `<models>_by_pk`
 - Aggregate roots: `<models>_aggregate`
@@ -15,9 +16,11 @@ Supported:
 - Nested Relay relation connections like `posts_connection`
 - Nested relation aggregate fields like `posts_aggregate`
 - Filtering with Hasura-style comparison operators, relation filters, and provider-aware JSON operators
+- ORM-backed relation aggregate count predicates such as `<relation>_aggregate: { count: { predicate: { _eq: 0 } } }`
 - Ordering, including ORM-backed relation `count` ordering
 - Offset pagination via `limit` and `offset`
 - Optional Hasura/Postgres scalar aliases through `scalarAliases: 'hasura'`, including `timestamptz`, `jsonb`, `numeric`, `bigint`, and native-type aliases like `uuid` / `citext`
+- Hasura-style generated helper/input type names when `compatibility: 'hasura-compat'` is enabled, including table-based `*_bool_exp`, `*_insert_input`, and aliased scalar comparison inputs like `uuid_comparison_exp`
 
 Partially supported:
 

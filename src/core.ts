@@ -14,6 +14,7 @@ export type {
     ZenStackGraphQLSchemaFactory,
 } from './schema-factory.js';
 export type {
+    CompatibilityMode,
     CreateZenStackGraphQLSchemaOptions,
     EnumDefinition,
     FeatureFlags,

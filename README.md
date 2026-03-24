@@ -58,7 +58,7 @@ const schema = createZenStackGraphQLSchema({
 
 ## Public API
 
-- `createZenStackGraphQLSchema({ schema, getClient, naming, features, relay, slicing, scalars, scalarAliases, hooks, extensions })`
+- `createZenStackGraphQLSchema({ schema, getClient, compatibility, naming, features, relay, slicing, scalars, scalarAliases, hooks, extensions })`
 - `createZenStackGraphQLSchemaFactory({ schema, getClient, getSlicing, getCacheKey, ... })`
 - `new GraphQLApiHandler({ schema, getClient, getContext, getSlicing, getCacheKey, ... })`
 - `createFetchGraphQLHandler(...)`
@@ -90,7 +90,16 @@ The generated schema uses Hasura-like defaults:
 - `distinct_on` is generated only for providers where the ORM supports `distinct`
 - `relay.enabled` adds an opt-in Relay query layer with `<models>_connection`, nested `<relation>_connection`, and `node(id:)`
 
-For closer compatibility with existing Hasura documents, two knobs are especially useful:
+For closer compatibility with existing Hasura documents, the easiest path is:
+
+- `compatibility: 'hasura-compat'`
+  - Turns on the safe Hasura-oriented compatibility bundle:
+    - singular table-style roots from `model.dbName` / `model.name`
+    - Hasura/Postgres scalar aliases like `uuid`, `timestamptz`, `jsonb`, `numeric`, `bigint`, and `citext`
+    - Hasura-style generated helper/input type names like `payment_payable_bool_exp` and `uuid_comparison_exp`
+    - ORM-backed relation aggregate count predicates like `posts_aggregate: { count: { predicate: { _eq: 0 } } }`
+
+If you only want part of that behavior, the lower-level knobs are still available:
 
 - `naming: 'hasura-table'`
   - Uses singular table-root names from `model.dbName` / `model.name`, such as `identity_organization`, `identity_organization_by_pk`, and `insert_identity_organization_one`
@@ -107,8 +116,7 @@ Example:
 ```ts
 const schema = createZenStackGraphQLSchema({
     schema: zenstackSchema,
-    naming: 'hasura-table',
-    scalarAliases: 'hasura',
+    compatibility: 'hasura-compat',
     async getClient(context) {
         return context.db;
     },
@@ -264,12 +272,14 @@ This adapter is aiming for "mostly painless for common Hasura CRUD use cases", n
 Supported well today:
 
 - Hasura-like list, `*_by_pk`, and `*_aggregate` query roots
+- Optional `compatibility: 'hasura-compat'` preset for table-style roots, Hasura/Postgres scalar aliases, Hasura-style generated helper/input type names, and safe aggregate `count.predicate` compatibility
 - Optional `naming: 'hasura-table'` mode for singular table-root compatibility with existing Hasura documents
 - Core insert, update, and delete mutation roots with `returning`
 - `on_conflict` on `insert_*` and `insert_*_one`
 - Nested relation inserts and the supported nested relation update shapes exposed by ZenStack ORM
 - Aggregates, relation aggregate fields, and parent `order_by` by relation `count`
 - Hasura-style filtering and ordering, including `_between`, relation `some` / `every` / `none`, and provider-gated `distinct_on`
+- ORM-backed Hasura aggregate count predicates like `_eq: 0` and `_gt: 0` on `<relation>_aggregate.count`
 - Optional `scalarAliases: 'hasura'` mode for Hasura/Postgres scalar names like `uuid`, `timestamptz`, `jsonb`, `numeric`, `bigint`, and `citext`
 - ZenStack custom procedures as GraphQL roots
 - Manual custom root resolvers through `extensions`

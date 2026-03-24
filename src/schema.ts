@@ -1,6 +1,7 @@
 import {
     GraphQLBoolean,
     GraphQLEnumType,
+    GraphQLError,
     GraphQLFieldResolver,
     GraphQLID,
     GraphQLInputObjectType,
@@ -38,6 +39,7 @@ import {
 } from './metadata.js';
 import { getScalarType, maybeWrapList, resolveScalarAliases } from './scalars.js';
 import type {
+    CompatibilityMode,
     CreateZenStackGraphQLSchemaOptions,
     FeatureFlags,
     ModelDelegate,
@@ -102,6 +104,14 @@ function pluralize(value: string) {
         return `${value.slice(0, -1)}ies`;
     }
     return `${value}s`;
+}
+
+function toSnakeCase(value: string) {
+    return value
+        .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+        .replace(/([A-Z]+)([A-Z][a-z])/g, '$1_$2')
+        .replace(/[-\s]+/g, '_')
+        .toLowerCase();
 }
 
 function toHasuraCollectionName(model: NormalizedModelDefinition) {
@@ -374,6 +384,7 @@ type AggregatePlan = {
 
 class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly normalizedSchema: NormalizedSchema;
+    private readonly compatibility: CompatibilityMode | undefined;
     private readonly features: Required<FeatureFlags>;
     private readonly naming: NamingStrategy;
     private readonly slicing: SchemaSlicingConfig | undefined;
@@ -392,6 +403,8 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private readonly selectColumnEnums = new Map<string, GraphQLEnumType>();
     private readonly comparisonInputs = new Map<string, GraphQLInputObjectType>();
     private readonly whereInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly aggregateWhereInputs = new Map<string, GraphQLInputObjectType>();
+    private readonly aggregateCountPredicateInputs = new Map<string, GraphQLInputObjectType>();
     private readonly orderInputs = new Map<string, GraphQLInputObjectType>();
     private readonly aggregateCountOrderInputs = new Map<string, GraphQLInputObjectType>();
     private readonly insertInputs = new Map<string, GraphQLInputObjectType>();
@@ -413,13 +426,22 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private pageInfoType: GraphQLObjectType | undefined;
 
     constructor(private readonly options: CreateZenStackGraphQLSchemaOptions<TClient, TContext>) {
+        this.compatibility = options.compatibility;
         this.normalizedSchema = normalizeSchema(options.schema);
         this.features = { ...DEFAULT_FEATURES, ...options.features };
-        this.naming = resolveNamingStrategy(options.naming);
+        this.naming = resolveNamingStrategy(
+            options.naming ?? (this.isHasuraCompatEnabled() ? 'hasura-table' : undefined)
+        );
         this.slicing = options.slicing;
-        this.scalarAliases = resolveScalarAliases(options.scalarAliases);
+        this.scalarAliases = resolveScalarAliases(
+            options.scalarAliases ?? (this.isHasuraCompatEnabled() ? 'hasura' : undefined)
+        );
         this.providerCapabilities = getProviderCapabilities(this.normalizedSchema);
         this.relayEnabled = options.relay?.enabled === true;
+    }
+
+    private isHasuraCompatEnabled() {
+        return this.compatibility === 'hasura-compat';
     }
 
     private supportsInsensitiveMode() {
@@ -466,6 +488,28 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             this.options.scalars,
             this.getScalarAliasName(scalar)
         );
+    }
+
+    private getModelTypeName(model: NormalizedModelDefinition) {
+        if (this.isHasuraCompatEnabled()) {
+            return model.dbName ?? toSnakeCase(model.name);
+        }
+        return this.naming.typeName(model.name);
+    }
+
+    private getScalarComparisonTypeName(
+        field: Pick<NormalizedFieldDefinition, 'kind' | 'type' | 'nativeType' | 'isList'>
+    ) {
+        if (
+            this.isHasuraCompatEnabled() &&
+            field.kind === 'scalar'
+        ) {
+            const aliasName = this.getScalarAliasName(field.type as ScalarType, field.nativeType);
+            if (aliasName) {
+                return `${aliasName}${field.isList ? '_list' : ''}_comparison_exp`;
+            }
+        }
+        return `${field.type}${field.isList ? '_list' : ''}_comparison_exp`;
     }
 
     private getFieldScalarType(field: Pick<NormalizedFieldDefinition, 'type' | 'nativeType'>) {
@@ -701,8 +745,128 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
             allowed.length === defaults.length &&
             allowed.every((kind, index) => defaults[index] === kind);
         return hasDefaultKinds
-            ? `${field.type}${field.isList ? '_list' : ''}_comparison_exp`
-            : `${this.naming.typeName(model.name)}_${field.name}_comparison_exp`;
+            ? this.getScalarComparisonTypeName(field)
+            : `${this.getModelTypeName(model)}_${field.name}_comparison_exp`;
+    }
+
+    private getOrCreateComparatorInput(
+        typeName: string,
+        field: NormalizedFieldDefinition,
+        filterKinds: SchemaFilterKind[]
+    ) {
+        const key = `${typeName}:${field.kind}:${field.type}:${field.isList ? 'list' : 'single'}:${filterKinds.join(',')}`;
+        const existing = this.comparisonInputs.get(key);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: typeName,
+            fields: () => {
+                const scalarType =
+                    field.kind === 'enum'
+                        ? this.getEnumType(field.type)
+                        : this.getFieldScalarType(field);
+                const baseType =
+                    field.isList
+                        ? new GraphQLList(new GraphQLNonNull(scalarType))
+                        : scalarType;
+                const fields: GraphQLInputFieldConfigMap = {
+                    ...(filterKinds.includes('Equality')
+                        ? {
+                              _eq: { type: baseType },
+                              _neq: { type: baseType },
+                              _in: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
+                              _nin: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
+                              _is_null: { type: this.getNamedScalarType('Boolean') },
+                              ...(field.kind === 'scalar' && field.type === 'Json'
+                                  ? {
+                                        equals: {
+                                            type: this.getNamedScalarType('Json'),
+                                        },
+                                        not: {
+                                            type: this.getNamedScalarType('Json'),
+                                        },
+                                    }
+                                  : {}),
+                          }
+                        : {}),
+                };
+
+                if (
+                    filterKinds.includes('Range') &&
+                    !field.isList &&
+                    field.kind === 'scalar' &&
+                    isComparableScalar(field.type)
+                ) {
+                    fields._gt = { type: baseType };
+                    fields._gte = { type: baseType };
+                    fields._lt = { type: baseType };
+                    fields._lte = { type: baseType };
+                    fields._between = {
+                        type: new GraphQLList(new GraphQLNonNull(baseType)),
+                    };
+                }
+
+                if (
+                    filterKinds.includes('Json') &&
+                    field.kind === 'scalar' &&
+                    field.type === 'Json' &&
+                    this.supportsJsonFilters()
+                ) {
+                    fields.path = { type: GraphQLString };
+                    fields.string_contains = { type: GraphQLString };
+                    fields.string_starts_with = { type: GraphQLString };
+                    fields.string_ends_with = { type: GraphQLString };
+                    fields.array_contains = { type: this.getNamedScalarType('Json') };
+                    fields.array_starts_with = { type: this.getNamedScalarType('Json') };
+                    fields.array_ends_with = { type: this.getNamedScalarType('Json') };
+                    if (this.supportsJsonFilterMode()) {
+                        fields.mode = { type: QUERY_MODE_ENUM };
+                    }
+                }
+
+                if (filterKinds.includes('List') && field.isList && this.supportsScalarListFilters()) {
+                    fields.has = { type: scalarType };
+                    fields.hasEvery = {
+                        type: new GraphQLList(new GraphQLNonNull(scalarType)),
+                    };
+                    fields.hasSome = {
+                        type: new GraphQLList(new GraphQLNonNull(scalarType)),
+                    };
+                    fields.isEmpty = { type: this.getNamedScalarType('Boolean') };
+                }
+
+                if (
+                    filterKinds.includes('Like') &&
+                    !field.isList &&
+                    field.kind === 'scalar' &&
+                    field.type === 'String'
+                ) {
+                    fields._contains = { type: GraphQLString };
+                    fields._ncontains = { type: GraphQLString };
+                    fields._icontains = { type: GraphQLString };
+                    fields._nicontains = { type: GraphQLString };
+                    fields._starts_with = { type: GraphQLString };
+                    fields._nstarts_with = { type: GraphQLString };
+                    fields._istarts_with = { type: GraphQLString };
+                    fields._nistarts_with = { type: GraphQLString };
+                    fields._ends_with = { type: GraphQLString };
+                    fields._nends_with = { type: GraphQLString };
+                    fields._iends_with = { type: GraphQLString };
+                    fields._niends_with = { type: GraphQLString };
+                    fields._like = { type: GraphQLString };
+                    fields._nlike = { type: GraphQLString };
+                    fields._ilike = { type: GraphQLString };
+                    fields._nilike = { type: GraphQLString };
+                }
+
+                return fields;
+            },
+        });
+
+        this.comparisonInputs.set(key, input);
+        return input;
     }
 
     createSchema() {
@@ -1126,7 +1290,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const enumType = new GraphQLEnumType({
-            name: `${this.naming.typeName(model.name)}_select_column`,
+            name: `${this.getModelTypeName(model)}_select_column`,
             values: Object.fromEntries(
                 this.getVisibleScalarFields(model).map((field) => [field.name, { value: field.name }])
             ),
@@ -1263,119 +1427,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     ) {
         const filterKinds = this.getFieldFilterKinds(model, field);
         const typeName = this.getFieldFilterKindsKey(model, field);
-        const key = `${typeName}:${field.kind}:${field.type}:${field.isList ? 'list' : 'single'}:${filterKinds.join(',')}`;
-        const existing = this.comparisonInputs.get(key);
-        if (existing) {
-            return existing;
-        }
-
-        const input = new GraphQLInputObjectType({
-            name: typeName,
-            fields: () => {
-                const scalarType =
-                    field.kind === 'enum'
-                        ? this.getEnumType(field.type)
-                        : this.getFieldScalarType(field);
-                const baseType =
-                    field.isList
-                        ? new GraphQLList(new GraphQLNonNull(scalarType))
-                        : scalarType;
-                const fields: GraphQLInputFieldConfigMap = {
-                    ...(filterKinds.includes('Equality')
-                        ? {
-                              _eq: { type: baseType },
-                              _neq: { type: baseType },
-                              _in: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
-                              _nin: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
-                              _is_null: { type: this.getNamedScalarType('Boolean') },
-                              ...(field.kind === 'scalar' && field.type === 'Json'
-                                  ? {
-                                        equals: {
-                                            type: this.getNamedScalarType('Json'),
-                                        },
-                                        not: {
-                                            type: this.getNamedScalarType('Json'),
-                                        },
-                                    }
-                                  : {}),
-                          }
-                        : {}),
-                };
-
-                if (
-                    filterKinds.includes('Range') &&
-                    !field.isList &&
-                    field.kind === 'scalar' &&
-                    isComparableScalar(field.type)
-                ) {
-                    fields._gt = { type: baseType };
-                    fields._gte = { type: baseType };
-                    fields._lt = { type: baseType };
-                    fields._lte = { type: baseType };
-                    fields._between = {
-                        type: new GraphQLList(new GraphQLNonNull(baseType)),
-                    };
-                }
-
-                if (
-                    filterKinds.includes('Json') &&
-                    field.kind === 'scalar' &&
-                    field.type === 'Json' &&
-                    this.supportsJsonFilters()
-                ) {
-                    fields.path = { type: GraphQLString };
-                    fields.string_contains = { type: GraphQLString };
-                    fields.string_starts_with = { type: GraphQLString };
-                    fields.string_ends_with = { type: GraphQLString };
-                    fields.array_contains = { type: this.getNamedScalarType('Json') };
-                    fields.array_starts_with = { type: this.getNamedScalarType('Json') };
-                    fields.array_ends_with = { type: this.getNamedScalarType('Json') };
-                    if (this.supportsJsonFilterMode()) {
-                        fields.mode = { type: QUERY_MODE_ENUM };
-                    }
-                }
-
-                if (filterKinds.includes('List') && field.isList && this.supportsScalarListFilters()) {
-                    fields.has = { type: scalarType };
-                    fields.hasEvery = {
-                        type: new GraphQLList(new GraphQLNonNull(scalarType)),
-                    };
-                    fields.hasSome = {
-                        type: new GraphQLList(new GraphQLNonNull(scalarType)),
-                    };
-                    fields.isEmpty = { type: this.getNamedScalarType('Boolean') };
-                }
-
-                if (
-                    filterKinds.includes('Like') &&
-                    !field.isList &&
-                    field.kind === 'scalar' &&
-                    field.type === 'String'
-                ) {
-                    fields._contains = { type: GraphQLString };
-                    fields._ncontains = { type: GraphQLString };
-                    fields._icontains = { type: GraphQLString };
-                    fields._nicontains = { type: GraphQLString };
-                    fields._starts_with = { type: GraphQLString };
-                    fields._nstarts_with = { type: GraphQLString };
-                    fields._istarts_with = { type: GraphQLString };
-                    fields._nistarts_with = { type: GraphQLString };
-                    fields._ends_with = { type: GraphQLString };
-                    fields._nends_with = { type: GraphQLString };
-                    fields._iends_with = { type: GraphQLString };
-                    fields._niends_with = { type: GraphQLString };
-                    fields._like = { type: GraphQLString };
-                    fields._nlike = { type: GraphQLString };
-                    fields._ilike = { type: GraphQLString };
-                    fields._nilike = { type: GraphQLString };
-                }
-
-                return fields;
-            },
-        });
-
-        this.comparisonInputs.set(key, input);
-        return input;
+        return this.getOrCreateComparatorInput(typeName, field, filterKinds);
     }
 
     private getTypeDefComparatorInput(
@@ -1384,65 +1436,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     ) {
         const filterKinds = this.getDefaultFieldFilterKinds(field);
         const typeName = `${typeDef.name}_${field.name}_comparison_exp`;
-        const key = `${typeName}:${field.kind}:${field.type}:${field.isList ? 'list' : 'single'}:${filterKinds.join(',')}`;
-        const existing = this.comparisonInputs.get(key);
-        if (existing) {
-            return existing;
-        }
-
-        const input = new GraphQLInputObjectType({
-            name: typeName,
-            fields: () => {
-                const scalarType =
-                    field.kind === 'enum'
-                        ? this.getEnumType(field.type)
-                        : this.getFieldScalarType(field);
-                const baseType = field.isList
-                    ? new GraphQLList(new GraphQLNonNull(scalarType))
-                    : scalarType;
-                const fields: GraphQLInputFieldConfigMap = {
-                    _eq: { type: baseType },
-                    _neq: { type: baseType },
-                    _in: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
-                    _nin: { type: new GraphQLList(new GraphQLNonNull(baseType)) },
-                    _is_null: { type: this.getNamedScalarType('Boolean') },
-                };
-
-                if (!field.isList && field.kind === 'scalar' && isComparableScalar(field.type)) {
-                    fields._gt = { type: baseType };
-                    fields._gte = { type: baseType };
-                    fields._lt = { type: baseType };
-                    fields._lte = { type: baseType };
-                    fields._between = {
-                        type: new GraphQLList(new GraphQLNonNull(baseType)),
-                    };
-                }
-
-                if (!field.isList && field.kind === 'scalar' && field.type === 'String') {
-                    fields._contains = { type: GraphQLString };
-                    fields._ncontains = { type: GraphQLString };
-                    fields._icontains = { type: GraphQLString };
-                    fields._nicontains = { type: GraphQLString };
-                    fields._starts_with = { type: GraphQLString };
-                    fields._nstarts_with = { type: GraphQLString };
-                    fields._istarts_with = { type: GraphQLString };
-                    fields._nistarts_with = { type: GraphQLString };
-                    fields._ends_with = { type: GraphQLString };
-                    fields._nends_with = { type: GraphQLString };
-                    fields._iends_with = { type: GraphQLString };
-                    fields._niends_with = { type: GraphQLString };
-                    fields._like = { type: GraphQLString };
-                    fields._nlike = { type: GraphQLString };
-                    fields._ilike = { type: GraphQLString };
-                    fields._nilike = { type: GraphQLString };
-                }
-
-                return fields;
-            },
-        });
-
-        this.comparisonInputs.set(key, input);
-        return input;
+        return this.getOrCreateComparatorInput(typeName, field, filterKinds);
     }
 
     private getWhereInput(model: NormalizedModelDefinition) {
@@ -1452,7 +1446,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_bool_exp`,
+            name: `${this.getModelTypeName(model)}_bool_exp`,
             fields: () => {
                 const fields: GraphQLInputFieldConfigMap = {
                     _and: { type: new GraphQLList(new GraphQLNonNull(input)) },
@@ -1476,6 +1470,13 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                             fields[`${field.name}_none`] = {
                                 type: this.getWhereInput(this.getModel(field.type)),
                             };
+                            if (this.isHasuraCompatEnabled()) {
+                                fields[`${field.name}_aggregate`] = {
+                                    type: this.getAggregateRelationWhereInput(
+                                        this.getModel(field.type)
+                                    ),
+                                };
+                            }
                         }
                     } else if (field.kind === 'typeDef') {
                         fields[field.name] = {
@@ -1497,6 +1498,58 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         });
 
         this.whereInputs.set(model.name, input);
+        return input;
+    }
+
+    private getAggregateRelationWhereInput(relatedModel: NormalizedModelDefinition) {
+        const existing = this.aggregateWhereInputs.get(relatedModel.name);
+        if (existing) {
+            return existing;
+        }
+
+        const input = new GraphQLInputObjectType({
+            name: `${this.getModelTypeName(relatedModel)}_aggregate_bool_exp`,
+            fields: () => ({
+                count: {
+                    type: this.getAggregateCountPredicateInput(relatedModel),
+                },
+            }),
+        });
+
+        this.aggregateWhereInputs.set(relatedModel.name, input);
+        return input;
+    }
+
+    private getAggregateCountPredicateInput(relatedModel: NormalizedModelDefinition) {
+        const existing = this.aggregateCountPredicateInputs.get(relatedModel.name);
+        if (existing) {
+            return existing;
+        }
+
+        const predicateField: NormalizedFieldDefinition = {
+            name: 'count',
+            kind: 'scalar',
+            type: 'Int',
+            isNullable: true,
+        };
+
+        const input = new GraphQLInputObjectType({
+            name: `${this.getModelTypeName(relatedModel)}_aggregate_count_bool_exp`,
+            fields: () => ({
+                predicate: {
+                    type: this.getOrCreateComparatorInput(
+                        this.getScalarComparisonTypeName(predicateField),
+                        predicateField,
+                        ['Equality', 'Range']
+                    ),
+                },
+                filter: {
+                    type: this.getWhereInput(relatedModel),
+                },
+            }),
+        });
+
+        this.aggregateCountPredicateInputs.set(relatedModel.name, input);
         return input;
     }
 
@@ -1568,7 +1621,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_order_by`,
+            name: `${this.getModelTypeName(model)}_order_by`,
             fields: () => {
                 const fields: GraphQLInputFieldConfigMap = {};
                 for (const field of this.getVisibleFields(model)) {
@@ -1605,7 +1658,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_${relationField.name}_aggregate_order_by`,
+            name: `${this.getModelTypeName(model)}_${relationField.name}_aggregate_order_by`,
             fields: () => ({
                 count: { type: ORDER_BY_ENUM },
             }),
@@ -1622,7 +1675,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_insert_input`,
+            name: `${this.getModelTypeName(model)}_insert_input`,
             fields: () => this.getInsertInputFields(model),
         });
 
@@ -1637,7 +1690,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_set_input`,
+            name: `${this.getModelTypeName(model)}_set_input`,
             fields: () => this.getUpdateInputFields(model),
         });
 
@@ -1652,7 +1705,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_inc_input`,
+            name: `${this.getModelTypeName(model)}_inc_input`,
             fields: () => {
                 const fields: GraphQLInputFieldConfigMap = {};
                 for (const field of this.getMutableFields(model)) {
@@ -1675,7 +1728,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
         if (model.primaryKey.length > 0) {
             constraints.push({
-                name: `${this.naming.typeName(model.name)}_pkey`,
+                name: `${this.getModelTypeName(model)}_pkey`,
                 fields: model.primaryKey,
             });
         }
@@ -1683,7 +1736,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         for (const constraint of model.uniqueConstraints) {
             const name =
                 constraint.name ??
-                `${this.naming.typeName(model.name)}_${constraint.fields.join('_')}_key`;
+                `${this.getModelTypeName(model)}_${constraint.fields.join('_')}_key`;
             constraints.push({
                 name,
                 fields: constraint.fields,
@@ -1708,7 +1761,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const enumType = new GraphQLEnumType({
-            name: `${this.naming.typeName(model.name)}_constraint`,
+            name: `${this.getModelTypeName(model)}_constraint`,
             values: Object.fromEntries(
                 this.getConflictConstraints(model).map((constraint) => [
                     constraint.name,
@@ -1728,7 +1781,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const enumType = new GraphQLEnumType({
-            name: `${this.naming.typeName(model.name)}_update_column`,
+            name: `${this.getModelTypeName(model)}_update_column`,
             values: Object.fromEntries(
                 this.getMutableFields(model)
                     .filter((field) => field.kind !== 'relation' && !field.isId)
@@ -1747,7 +1800,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_on_conflict`,
+            name: `${this.getModelTypeName(model)}_on_conflict`,
             fields: () => ({
                 constraint: {
                     type: new GraphQLNonNull(this.getConstraintEnum(model)),
@@ -1780,7 +1833,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_${relationField.name}_rel_insert_input`,
+            name: `${this.getModelTypeName(model)}_${relationField.name}_rel_insert_input`,
             fields: () => ({
                 data: {
                     type: relationField.isList
@@ -1803,7 +1856,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_nested_update_input`,
+            name: `${this.getModelTypeName(model)}_nested_update_input`,
             fields: () => ({
                 _set: { type: this.getScalarSetInputObject(model) },
                 _inc: { type: this.getIncInput(model) },
@@ -1821,7 +1874,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(relatedModel.name)}_rel_update_many_input`,
+            name: `${this.getModelTypeName(relatedModel)}_rel_update_many_input`,
             fields: () => ({
                 where: { type: new GraphQLNonNull(this.getWhereInput(relatedModel)) },
                 _set: { type: this.getScalarSetInputObject(relatedModel) },
@@ -1856,7 +1909,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_${relationField.name}_rel_update_input`,
+            name: `${this.getModelTypeName(model)}_${relationField.name}_rel_update_input`,
             fields: () => {
                 const fields: GraphQLInputFieldConfigMap = {};
 
@@ -1925,7 +1978,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const input = new GraphQLInputObjectType({
-            name: `${this.naming.typeName(model.name)}_scalar_set_input`,
+            name: `${this.getModelTypeName(model)}_scalar_set_input`,
             fields: () => this.getScalarSetInputFields(model),
         });
 
@@ -2060,7 +2113,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const objectType = new GraphQLObjectType({
-            name: `${this.naming.typeName(model.name)}Node`,
+            name: `${this.getModelTypeName(model)}Node`,
             description: model.description,
             interfaces: () => [this.getRelayNodeInterface()],
             fields: () => {
@@ -2117,7 +2170,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const edgeType = new GraphQLObjectType({
-            name: `${this.naming.typeName(model.name)}Edge`,
+            name: `${this.getModelTypeName(model)}Edge`,
             fields: () => ({
                 cursor: { type: new GraphQLNonNull(GraphQLString) },
                 node: {
@@ -2137,7 +2190,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const connectionType = new GraphQLObjectType({
-            name: `${this.naming.typeName(model.name)}Connection`,
+            name: `${this.getModelTypeName(model)}Connection`,
             fields: () => ({
                 edges: {
                     type: new GraphQLNonNull(
@@ -2169,7 +2222,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const objectType = new GraphQLObjectType({
-            name: this.naming.typeName(model.name),
+            name: this.getModelTypeName(model),
             description: model.description,
             fields: () => {
                 const fields: GraphQLFieldConfigMap<Record<string, unknown>, TContext> = {};
@@ -2278,7 +2331,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const responseType = new GraphQLObjectType({
-            name: `${this.naming.typeName(model.name)}_mutation_response`,
+            name: `${this.getModelTypeName(model)}_mutation_response`,
             fields: () => ({
                 affected_rows: {
                     type: new GraphQLNonNull(GraphQLInt),
@@ -2306,7 +2359,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const leafType = new GraphQLObjectType({
-            name: `${this.naming.typeName(model.name)}_${suffix}_fields`,
+            name: `${this.getModelTypeName(model)}_${suffix}_fields`,
             fields: () => {
                 const fields: GraphQLFieldConfigMap<unknown, TContext> = {};
                 for (const field of this.getVisibleScalarFields(model)) {
@@ -2343,7 +2396,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const aggregateFieldsType = new GraphQLObjectType({
-            name: `${this.naming.typeName(model.name)}_aggregate_fields`,
+            name: `${this.getModelTypeName(model)}_aggregate_fields`,
             fields: () => ({
                 count: {
                     type: new GraphQLNonNull(GraphQLInt),
@@ -2380,7 +2433,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
         }
 
         const aggregateType = new GraphQLObjectType({
-            name: `${this.naming.typeName(model.name)}_aggregate`,
+            name: `${this.getModelTypeName(model)}_aggregate`,
             fields: () => ({
                 aggregate: {
                     type: this.getAggregateFieldsType(model),
@@ -2950,7 +3003,7 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     ) {
         return {
             ...record,
-            __relayTypeName: `${this.naming.typeName(model.name)}Node`,
+            __relayTypeName: `${this.getModelTypeName(model)}Node`,
         };
     }
 
@@ -3593,6 +3646,26 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
                 continue;
             }
 
+            if (
+                this.isHasuraCompatEnabled() &&
+                !field &&
+                key.endsWith('_aggregate')
+            ) {
+                const relationName = key.slice(0, -'_aggregate'.length);
+                const relationField = model.fieldMap.get(relationName);
+                if (!relationField || relationField.kind !== 'relation' || !relationField.isList) {
+                    continue;
+                }
+
+                const aggregateWhere = this.compileAggregateRelationWhere(relationField, value);
+                if (!aggregateWhere) {
+                    continue;
+                }
+
+                mergeRelationFilter(relationName, aggregateWhere.operator, aggregateWhere.where);
+                continue;
+            }
+
             if (!field) {
                 continue;
             }
@@ -3993,6 +4066,108 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 
     private buildMutationData(args: Record<string, unknown>) {
         return args;
+    }
+
+    private getAggregateCountRelationOperator(
+        predicate: Record<string, unknown>
+    ): 'some' | 'none' | undefined {
+        const entries = Object.entries(predicate).filter(([, value]) => value !== undefined);
+        if (entries.length === 0) {
+            return undefined;
+        }
+        if (entries.length > 1) {
+            throw new GraphQLError(
+                'Unsupported aggregate count predicate: only one comparison operator is allowed',
+                {
+                    extensions: {
+                        code: 'BAD_USER_INPUT',
+                    },
+                }
+            );
+        }
+
+        const [operator, value] = entries[0];
+        if (typeof value !== 'number') {
+            throw new GraphQLError(
+                'Unsupported aggregate count predicate: only numeric zero/one existence checks are supported',
+                {
+                    extensions: {
+                        code: 'BAD_USER_INPUT',
+                    },
+                }
+            );
+        }
+
+        switch (operator) {
+            case '_eq':
+                if (value === 0) {
+                    return 'none';
+                }
+                break;
+            case '_neq':
+                if (value === 0) {
+                    return 'some';
+                }
+                break;
+            case '_gt':
+                if (value === 0) {
+                    return 'some';
+                }
+                break;
+            case '_gte':
+                if (value === 1) {
+                    return 'some';
+                }
+                break;
+            case '_lt':
+                if (value === 1) {
+                    return 'none';
+                }
+                break;
+            case '_lte':
+                if (value === 0) {
+                    return 'none';
+                }
+                break;
+        }
+
+        throw new GraphQLError(
+            'Unsupported aggregate count predicate: only ORM-backed existence-equivalent comparisons are supported',
+            {
+                extensions: {
+                    code: 'BAD_USER_INPUT',
+                },
+            }
+        );
+    }
+
+    private compileAggregateRelationWhere(
+        relationField: NormalizedFieldDefinition,
+        value: unknown
+    ) {
+        if (!relationField.isList || !isPlainObject(value) || !isPlainObject(value.count)) {
+            return undefined;
+        }
+
+        const relatedModel = this.getModel(relationField.type);
+        const countFilter = value.count;
+        const predicate = isPlainObject(countFilter.predicate) ? countFilter.predicate : undefined;
+        if (!predicate) {
+            return undefined;
+        }
+
+        const operator = this.getAggregateCountRelationOperator(predicate);
+        if (!operator) {
+            return undefined;
+        }
+
+        const filteredWhere = isPlainObject(countFilter.filter)
+            ? this.toWhere(relatedModel, countFilter.filter)
+            : undefined;
+        return {
+            operator,
+            where: filteredWhere ?? {},
+        };
     }
 
     private compileInsertData(
