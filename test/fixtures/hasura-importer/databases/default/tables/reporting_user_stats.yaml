@@ -1,0 +1,10 @@
+table:
+  schema: reporting
+  name: user_stats
+select_permissions:
+  - role: analyst
+    permission:
+      columns:
+        - user_id
+        - post_count
+      filter: {}

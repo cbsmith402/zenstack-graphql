@@ -1,0 +1,29 @@
+table:
+  schema: public
+  name: posts
+object_relationships:
+  - name: author
+    using:
+      foreign_key_constraint_on: author_id
+select_permissions:
+  - role: user
+    permission:
+      columns:
+        - id
+        - title
+        - author_id
+      filter:
+        author:
+          id:
+            _eq: X-Hasura-User-Id
+update_permissions:
+  - role: user
+    permission:
+      columns:
+        - title
+      filter:
+        author_id:
+          _eq: X-Hasura-User-Id
+      check:
+        title:
+          _neq: ""

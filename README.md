@@ -265,6 +265,27 @@ That helper intentionally stays small. It standardizes:
 - request-to-context mapping
 - role-based schema slicing and cache keys
 
+## Hasura Importer
+
+For one-off migrations, the repo now includes a CLI that can turn a Hasura Postgres metadata export
+plus live Postgres introspection into a best-effort `schema.zmodel`.
+
+```bash
+npm run hasura:import -- \
+  --metadata-dir /path/to/hasura/metadata \
+  --database-url "$DATABASE_URL" \
+  --source default \
+  --out ./schema.zmodel \
+  --report
+```
+
+V1 importer scope:
+
+- Hasura Postgres metadata only
+- tracked tables and tracked views
+- best-effort ZenStack `@@allow` policy generation
+- inline TODO comments for unsupported permission features and no-key views
+
 ## Compatibility Snapshot
 
 This adapter is aiming for "mostly painless for common Hasura CRUD use cases", not full Hasura platform parity.

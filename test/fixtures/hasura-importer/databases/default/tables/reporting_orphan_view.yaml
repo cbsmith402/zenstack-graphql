@@ -1,0 +1,9 @@
+table:
+  schema: reporting
+  name: orphan_view
+select_permissions:
+  - role: analyst
+    permission:
+      columns:
+        - label
+      filter: {}

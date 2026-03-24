@@ -75,6 +75,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "hasura:import": "node --import tsx scripts/import-hasura-to-zmodel.ts",
     "demo:express:dev": "npm run dev --prefix examples/express-demo",
     "demo:express:typecheck": "npm run typecheck --prefix examples/express-demo",
     "demo:build": "npm run build --prefix examples/nextjs-demo",
@@ -98,8 +99,11 @@
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
+    "@types/pg": "^8.20.0",
     "graphql": "^16.11.0",
+    "pg": "^8.20.0",
     "tsx": "^4.20.5",
-    "typescript": "^5.9.2"
+    "typescript": "^5.9.2",
+    "yaml": "^2.8.3"
   }
 }
