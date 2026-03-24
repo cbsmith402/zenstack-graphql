@@ -2,6 +2,8 @@
 
 `zenstack-graphql` is a standalone GraphQL adapter for ZenStack-style model metadata. It generates a framework-agnostic `GraphQLSchema` with Hasura-like CRUD roots, model-driven filters and ordering, aggregates, nested relation inserts, core insert/update/delete mutations, ZenStack procedure roots, and optional custom root resolvers.
 
+[ZenStack](https://zenstack.dev/) is a schema-first TypeScript data platform and ORM that lets you model your data, access policies, and API-facing behavior in ZModel, then generate a typed runtime on top of your database. This package is the GraphQL layer that sits on top of that metadata and exposes it with Hasura-inspired conventions.
+
 ## Requirements
 
 - Node.js `>=18.17`
