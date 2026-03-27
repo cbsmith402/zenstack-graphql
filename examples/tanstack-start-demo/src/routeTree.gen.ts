@@ -13,7 +13,7 @@ import { Route as IndexRouteImport } from './routes/index'
 import { Route as ApiStateRouteImport } from './routes/api/state'
 import { Route as ApiSchemaRouteImport } from './routes/api/schema'
 import { Route as ApiResetRouteImport } from './routes/api/reset'
-import { Route as ApiGraphqlRouteImport } from './routes/api/graphql'
+import { Route as ApiSplatRouteImport } from './routes/api/$'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -35,22 +35,22 @@ const ApiResetRoute = ApiResetRouteImport.update({
   path: '/api/reset',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiGraphqlRoute = ApiGraphqlRouteImport.update({
-  id: '/api/graphql',
-  path: '/api/graphql',
+const ApiSplatRoute = ApiSplatRouteImport.update({
+  id: '/api/$',
+  path: '/api/$',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/api/graphql': typeof ApiGraphqlRoute
+  '/api/$': typeof ApiSplatRoute
   '/api/reset': typeof ApiResetRoute
   '/api/schema': typeof ApiSchemaRoute
   '/api/state': typeof ApiStateRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/api/graphql': typeof ApiGraphqlRoute
+  '/api/$': typeof ApiSplatRoute
   '/api/reset': typeof ApiResetRoute
   '/api/schema': typeof ApiSchemaRoute
   '/api/state': typeof ApiStateRoute
@@ -58,28 +58,22 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/api/graphql': typeof ApiGraphqlRoute
+  '/api/$': typeof ApiSplatRoute
   '/api/reset': typeof ApiResetRoute
   '/api/schema': typeof ApiSchemaRoute
   '/api/state': typeof ApiStateRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/api/graphql' | '/api/reset' | '/api/schema' | '/api/state'
+  fullPaths: '/' | '/api/$' | '/api/reset' | '/api/schema' | '/api/state'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/api/graphql' | '/api/reset' | '/api/schema' | '/api/state'
-  id:
-    | '__root__'
-    | '/'
-    | '/api/graphql'
-    | '/api/reset'
-    | '/api/schema'
-    | '/api/state'
+  to: '/' | '/api/$' | '/api/reset' | '/api/schema' | '/api/state'
+  id: '__root__' | '/' | '/api/$' | '/api/reset' | '/api/schema' | '/api/state'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  ApiGraphqlRoute: typeof ApiGraphqlRoute
+  ApiSplatRoute: typeof ApiSplatRoute
   ApiResetRoute: typeof ApiResetRoute
   ApiSchemaRoute: typeof ApiSchemaRoute
   ApiStateRoute: typeof ApiStateRoute
@@ -115,11 +109,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiResetRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/graphql': {
-      id: '/api/graphql'
-      path: '/api/graphql'
-      fullPath: '/api/graphql'
-      preLoaderRoute: typeof ApiGraphqlRouteImport
+    '/api/$': {
+      id: '/api/$'
+      path: '/api/$'
+      fullPath: '/api/$'
+      preLoaderRoute: typeof ApiSplatRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -127,7 +121,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  ApiGraphqlRoute: ApiGraphqlRoute,
+  ApiSplatRoute: ApiSplatRoute,
   ApiResetRoute: ApiResetRoute,
   ApiSchemaRoute: ApiSchemaRoute,
   ApiStateRoute: ApiStateRoute,

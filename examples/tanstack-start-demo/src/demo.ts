@@ -5,11 +5,12 @@ import Database from 'better-sqlite3';
 import { ZenStackClient } from '@zenstackhq/orm';
 import type { ClientContract } from '@zenstackhq/orm';
 import { SqliteDialect } from '@zenstackhq/orm/dialects/sqlite';
+import { TanStackStartHandler } from '@zenstackhq/server/tanstack-start';
 import {
     GraphQLNonNull,
     GraphQLString,
+    GraphQLApiHandler,
     createHasuraCompatibilityHelpers,
-    createFetchGraphQLHandler,
     createZenStackGraphQLSchemaFactory,
     type CreateZenStackGraphQLSchemaFactoryOptions,
 } from 'zenstack-graphql';
@@ -24,7 +25,7 @@ import { schema } from '../zenstack/schema';
 export const DATABASE_PATH = path.join(process.cwd(), 'zenstack', 'dev.db');
 
 type DemoClient = ClientContract<typeof schema>;
-
+type DemoGraphQLClient = DemoClient & { __graphqlRole?: DemoRole };
 declare global {
     var __ZENSTACK_GRAPHQL_TANSTACK_CLIENT__: DemoClient | undefined;
     var __ZENSTACK_GRAPHQL_TANSTACK_INIT__: Promise<void> | undefined;
@@ -63,7 +64,7 @@ const serverExtensions = {
                 _args: Record<string, unknown>,
                 _context: unknown,
                 _info: unknown,
-                { client }: { client: Awaited<ReturnType<typeof ensureDemoDatabaseReady>> }
+                { client }: { client: DemoClient }
             ) {
                 const [userCount, postCount, latestUser] = await Promise.all([
                     client.user.count(),
@@ -119,6 +120,20 @@ function getDemoClient() {
         globalThis.__ZENSTACK_GRAPHQL_TANSTACK_CLIENT__ = createClient();
     }
     return globalThis.__ZENSTACK_GRAPHQL_TANSTACK_CLIENT__;
+}
+
+function createGraphQLClient(role: DemoRole): DemoGraphQLClient {
+    const client = getDemoClient();
+    return new Proxy(client as DemoGraphQLClient, {
+        get(target, property, receiver) {
+            if (property === '__graphqlRole') {
+                return role;
+            }
+
+            const value = Reflect.get(target, property, receiver);
+            return typeof value === 'function' ? value.bind(target) : value;
+        },
+    });
 }
 
 async function seedDemoDatabase(client: DemoClient) {
@@ -234,16 +249,35 @@ const schemaFactoryOptions: CreateZenStackGraphQLSchemaFactoryOptions<
 
 export const graphqlSchemaFactory = createZenStackGraphQLSchemaFactory(schemaFactoryOptions);
 
-export const handleGraphQLRequest = createFetchGraphQLHandler({
+const graphQLApiHandler = new GraphQLApiHandler<
+    DemoGraphQLClient,
+    undefined,
+    DemoRole,
+    typeof schema
+>({
     schema,
+    allowedPaths: ['graphql'],
     relay: { enabled: true },
-    async getClient() {
-        return ensureDemoDatabaseReady();
+    getSlicing(request) {
+        return hasura.getSlicing(
+            new Request('http://local.invalid'),
+            { role: request.client.__graphqlRole ?? DEFAULT_DEMO_ROLE }
+        );
     },
-    getContext: hasura.getContext,
-    getSlicing: hasura.getSlicing,
-    getCacheKey: hasura.getCacheKey,
+    getCacheKey({ request }) {
+        return hasura.getCacheKey({
+            context: { role: request.client.__graphqlRole ?? DEFAULT_DEMO_ROLE },
+        });
+    },
     extensions: serverExtensions,
+});
+
+export const handleGraphQLRequest = TanStackStartHandler({
+    apiHandler: graphQLApiHandler,
+    async getClient(request) {
+        await ensureDemoDatabaseReady();
+        return createGraphQLClient(hasura.getContext(request).role);
+    },
 });
 
 export function resolveRole(request: Request) {

@@ -59,6 +59,7 @@ import type {
     ScalarAliasConfig,
     SchemaCrudOperation,
     SchemaFilterKind,
+    SchemaInput,
     SchemaSlicingConfig,
     ZenStackClientLike,
 } from './types.js';
@@ -382,7 +383,11 @@ type AggregatePlan = {
     nodeSelection: Record<string, unknown> | undefined;
 };
 
-class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
+class SchemaBuilder<
+    TClient extends ZenStackClientLike,
+    TContext,
+    TSchema extends SchemaInput = SchemaInput,
+> {
     private readonly normalizedSchema: NormalizedSchema;
     private readonly compatibility: CompatibilityMode | undefined;
     private readonly features: Required<FeatureFlags>;
@@ -425,7 +430,9 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
     private nodeInterfaceType: GraphQLInterfaceType | undefined;
     private pageInfoType: GraphQLObjectType | undefined;
 
-    constructor(private readonly options: CreateZenStackGraphQLSchemaOptions<TClient, TContext>) {
+    constructor(
+        private readonly options: CreateZenStackGraphQLSchemaOptions<TClient, TContext, TSchema>
+    ) {
         this.compatibility = options.compatibility;
         this.normalizedSchema = normalizeSchema(options.schema);
         this.features = { ...DEFAULT_FEATURES, ...options.features };
@@ -4856,7 +4863,8 @@ class SchemaBuilder<TClient extends ZenStackClientLike, TContext> {
 export function createZenStackGraphQLSchema<
     TClient extends ZenStackClientLike,
     TContext = unknown,
->(options: CreateZenStackGraphQLSchemaOptions<TClient, TContext>) {
+    TSchema extends SchemaInput = SchemaInput,
+>(options: CreateZenStackGraphQLSchemaOptions<TClient, TContext, TSchema>) {
     const builder = new SchemaBuilder(options);
     return builder.createSchema();
 }

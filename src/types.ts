@@ -259,6 +259,25 @@ export interface RelayOptions {
 
 export type CompatibilityMode = 'hasura-compat';
 
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+export type Logger = (level: LogLevel, message: string, error?: unknown) => void;
+export type LogConfig = ReadonlyArray<LogLevel> | Logger;
+
+export interface GraphQLApiRequestContext<TClient = unknown, TContext = unknown> {
+    client: TClient;
+    method: string;
+    path: string;
+    query?: Record<string, string | string[]>;
+    requestBody?: unknown;
+    context?: TContext;
+}
+
+export interface GraphQLApiResponse {
+    status: number;
+    headers?: Record<string, string>;
+    body: unknown;
+}
+
 export interface GraphQLHandlerRequest<TRequest = unknown> {
     method: string;
     request: TRequest;
@@ -357,8 +376,14 @@ export interface RootFieldExtensions<TClient = unknown, TContext = unknown> {
     mutation?: Record<string, RootFieldConfig<TClient, TContext>>;
 }
 
-export interface CreateZenStackGraphQLSchemaOptions<TClient = unknown, TContext = unknown> {
-    schema: ZenStackSchemaLike | ModelDefinition[];
+export type SchemaInput = ZenStackSchemaLike | ModelDefinition[];
+
+export interface CreateZenStackGraphQLSchemaOptions<
+    TClient = unknown,
+    TContext = unknown,
+    TSchema extends SchemaInput = SchemaInput,
+> {
+    schema: TSchema;
     getClient(context: TContext): TClient | Promise<TClient>;
     compatibility?: CompatibilityMode;
     naming?: NamingConfig;

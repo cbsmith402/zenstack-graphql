@@ -24,12 +24,6 @@ Use the lowest-level API that matches your app:
   - For direct schema generation and custom GraphQL server wiring
 - `zenstack-graphql/server`
   - For the framework-agnostic transport handler
-- `zenstack-graphql/next`
-  - For Next.js route handlers
-- `zenstack-graphql/express`
-  - For Express middleware
-- `zenstack-graphql/hono`
-  - For Hono handlers
 - `zenstack-graphql/hasura`
   - For convenience helpers around `x-hasura-role` request extraction and schema slicing
 - `zenstack-graphql`
@@ -62,11 +56,8 @@ const schema = createZenStackGraphQLSchema({
 
 - `createZenStackGraphQLSchema({ schema, getClient, compatibility, naming, features, relay, slicing, scalars, scalarAliases, hooks, extensions })`
 - `createZenStackGraphQLSchemaFactory({ schema, getClient, getSlicing, getCacheKey, ... })`
-- `new GraphQLApiHandler({ schema, getClient, getContext, getSlicing, getCacheKey, ... })`
+- `new GraphQLApiHandler({ schema, getSlicing, getCacheKey, ... })`
 - `createFetchGraphQLHandler(...)`
-- `createNextGraphQLHandler(...)`
-- `createExpressGraphQLMiddleware(...)`
-- `createHonoGraphQLHandler(...)`
 - `normalizeSchema(schema)`
 - `normalizeError(error)`
 
@@ -138,53 +129,79 @@ import { GraphQLApiHandler } from 'zenstack-graphql';
 
 const handler = new GraphQLApiHandler({
     schema,
-    async getClient(request) {
-        return request.db;
-    },
 });
 
-const response = await handler.handle({
+const response = await handler.handleRequest({
+    client: db,
     method: 'POST',
-    request: { db },
-    body: {
+    path: '/api/graphql',
+    requestBody: {
         query: 'query { users { id name } }',
     },
 });
 ```
 
-Or use the thin framework adapters directly.
+`GraphQLApiHandler` is intentionally shaped to be assignment-compatible with ZenStack's
+`ApiHandler` type from `@zenstackhq/server/api`, so it can participate in the same
+logical handler/server-adapter model.
+
+Then use a thin framework adapter to resolve the request-scoped client.
+
+When a ZenStack server adapter already fits your GraphQL route shape, you can use it directly
+with `GraphQLApiHandler` instead of going through this package's fetch helper.
 
 ### Next.js
 
 ```ts
-import { createNextGraphQLHandler } from 'zenstack-graphql/next';
+import type { NextRequest } from 'next/server';
+import { GraphQLApiHandler } from 'zenstack-graphql/server';
+import { NextRequestHandler } from '@zenstackhq/server/next';
 
-export const POST = createNextGraphQLHandler({
+const apiHandler = new GraphQLApiHandler({
     schema,
+    allowedPaths: [''],
+});
+
+const handler = NextRequestHandler({
+    apiHandler,
     async getClient(request) {
         return getZenStackClientFromRequest(request);
     },
-    getContext(request) {
-        return {
-            role: request.headers.get('x-hasura-role') ?? 'admin',
-        };
-    },
+    useAppDir: true,
 });
+
+type RouteContext = {
+    params: Promise<{ path?: string[] }>;
+};
+
+export const POST = (request: NextRequest, context: RouteContext) =>
+    handler(request, {
+        params: context.params.then((params) => ({
+            path: params.path ?? [],
+        })),
+    });
 ```
+
+Mount that handler in an optional catch-all route like
+`app/api/graphql/[[...path]]/route.ts`. The tiny `params.path ?? []` normalization is only
+there because ZenStack's current Next.js adapter expects catch-all path params, while the root
+GraphQL endpoint does not supply one.
 
 ### Express
 
 ```ts
 import express from 'express';
-import { createExpressGraphQLMiddleware } from 'zenstack-graphql/express';
+import { GraphQLApiHandler } from 'zenstack-graphql/server';
+import { ZenStackMiddleware } from '@zenstackhq/server/express';
 
 const app = express();
 app.use(express.json());
+const graphqlApiHandler = new GraphQLApiHandler({ schema });
 
 app.use(
     '/api/graphql',
-    createExpressGraphQLMiddleware({
-        schema,
+    ZenStackMiddleware({
+        apiHandler: graphqlApiHandler,
         async getClient(req) {
             return getZenStackClientFromRequest(req);
         },
@@ -192,34 +209,76 @@ app.use(
 );
 ```
 
+For that direct adapter path, install `@zenstackhq/server` alongside `zenstack-graphql`.
+
 ### Hono
 
 ```ts
 import { Hono } from 'hono';
-import { createHonoGraphQLHandler } from 'zenstack-graphql/hono';
+import { GraphQLApiHandler } from 'zenstack-graphql/server';
+import { createHonoHandler } from '@zenstackhq/server/hono';
 
 const app = new Hono();
-const graphql = createHonoGraphQLHandler({
+const apiHandler = new GraphQLApiHandler({ schema });
+const graphql = createHonoHandler({
+    apiHandler,
+    async getClient(c) {
+        return getZenStackClientFromRequest(c);
+    },
+});
+
+app.use('/api/graphql/*', graphql);
+```
+
+### TanStack Start
+
+```ts
+import { createFileRoute } from '@tanstack/react-router';
+import { GraphQLApiHandler } from 'zenstack-graphql/server';
+import { TanStackStartHandler } from '@zenstackhq/server/tanstack-start';
+
+const apiHandler = new GraphQLApiHandler({
     schema,
+    allowedPaths: ['graphql'],
+});
+
+const handler = TanStackStartHandler({
+    apiHandler,
     async getClient(request) {
         return getZenStackClientFromRequest(request);
     },
 });
 
-app.all('/api/graphql', (c) => graphql(c));
+export const Route = createFileRoute('/api/$')({
+    server: {
+        handlers: {
+            GET: handler,
+            POST: handler,
+            PUT: handler,
+            PATCH: handler,
+            DELETE: handler,
+        },
+    },
+});
 ```
 
 ### Transport Notes
 
 The current adapter layer supports:
 
+- the framework-agnostic `GraphQLApiHandler`
 - fetch / Web `Request` handlers
-- Next.js route handlers
-- Express middleware
-- Hono handlers
+- direct use with ZenStack's Express, Next.js, Hono, and TanStack Start adapters
 
 All of them share the same core execution path, including request-wide mutation transactions,
 Relay support, procedures, extensions, and role-aware schema slicing.
+
+For fixed GraphQL endpoints, the framework-specific adapters that rely on catch-all routing should
+be mounted on catch-all-style routes and paired with `allowedPaths` in `GraphQLApiHandler`:
+
+- Next.js: `app/api/graphql/[[...path]]/route.ts` with `allowedPaths: ['']`
+- Hono: `app.use('/api/graphql/*', ...)` with `allowedPaths: ['']`
+- TanStack Start: `createFileRoute('/api/$')` with `allowedPaths: ['graphql']`
 
 ## Hasura Helpers
 
@@ -250,12 +309,39 @@ const hasura = createHasuraCompatibilityHelpers<Request, 'admin' | 'user'>({
     },
 });
 
-createNextGraphQLHandler({
+type RequestScopedClient = ReturnType<typeof getZenStackClientFromRequest> & {
+    __graphqlRole?: 'admin' | 'user';
+};
+
+const apiHandler = new GraphQLApiHandler<RequestScopedClient>({
     schema,
-    getClient: getZenStackClientFromRequest,
-    getContext: hasura.getContext,
-    getSlicing: hasura.getSlicing,
-    getCacheKey: hasura.getCacheKey,
+    getSlicing(request) {
+        return hasura.getSlicing(new Request('http://local.invalid'), {
+            role: request.client.__graphqlRole ?? 'admin',
+        });
+    },
+    getCacheKey({ request }) {
+        return hasura.getCacheKey({
+            context: { role: request.client.__graphqlRole ?? 'admin' },
+        });
+    },
+});
+
+createFetchGraphQLHandler({
+    apiHandler,
+    async getClient(request) {
+        const baseClient = await getZenStackClientFromRequest(request);
+        const role = hasura.getContext(request).role;
+        return new Proxy(baseClient as RequestScopedClient, {
+            get(target, property, receiver) {
+                if (property === '__graphqlRole') {
+                    return role;
+                }
+                const value = Reflect.get(target, property, receiver);
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        });
+    },
 });
 ```
 
@@ -377,18 +463,18 @@ const result = await factory.execute({
 
 ## Example Apps
 
-The repository now includes three runnable examples:
+The repository now includes four runnable examples:
 
 - `examples/nextjs-demo`
   - Full browser playground with schema viewer, seeded data panel, role switching, and sample operations
 - `examples/express-demo`
-  - Minimal Express server using `createExpressGraphQLMiddleware`
+  - Minimal Express server using ZenStack's `ZenStackMiddleware` with `GraphQLApiHandler`
 - `examples/hono-demo`
-  - Minimal Hono server using `createHonoGraphQLHandler`
+  - Minimal Hono server using ZenStack's `createHonoHandler` with `GraphQLApiHandler`
 - `examples/tanstack-start-demo`
-  - TanStack Start app using server routes and the fetch-based adapter
+  - TanStack Start app using ZenStack's `TanStackStartHandler` with `GraphQLApiHandler`
 
-All three examples use a real ZenStack schema, generate local metadata with `zenstack generate`,
+All four examples use a real ZenStack schema, generate local metadata with `zenstack generate`,
 boot a SQLite database, and support Hasura-style role selection via the `x-hasura-role` header.
 
 ### Next.js

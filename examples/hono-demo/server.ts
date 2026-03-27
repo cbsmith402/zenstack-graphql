@@ -7,6 +7,7 @@ import { serve } from '@hono/node-server';
 import { ZenStackClient } from '@zenstackhq/orm';
 import type { ClientContract } from '@zenstackhq/orm';
 import { SqliteDialect } from '@zenstackhq/orm/dialects/sqlite';
+import { createHonoHandler } from '@zenstackhq/server/hono';
 import {
     GraphQLNonNull,
     GraphQLString,
@@ -15,7 +16,7 @@ import {
     type CreateZenStackGraphQLSchemaFactoryOptions,
     type SchemaSlicingConfig,
 } from 'zenstack-graphql/core';
-import { createHonoGraphQLHandler } from 'zenstack-graphql/hono';
+import { GraphQLApiHandler } from 'zenstack-graphql/server';
 
 import { schema } from './zenstack/schema.js';
 
@@ -26,6 +27,7 @@ const DEFAULT_DEMO_ROLE = 'admin';
 
 type DemoRole = 'admin' | 'user';
 type DemoClient = ClientContract<typeof schema>;
+type DemoGraphQLClient = DemoClient & { __graphqlRole?: DemoRole };
 
 declare global {
     var __ZENSTACK_GRAPHQL_HONO_CLIENT__: DemoClient | undefined;
@@ -135,6 +137,20 @@ function getDemoClient() {
     return globalThis.__ZENSTACK_GRAPHQL_HONO_CLIENT__;
 }
 
+function createGraphQLClient(role: DemoRole): DemoGraphQLClient {
+    const client = getDemoClient();
+    return new Proxy(client as DemoGraphQLClient, {
+        get(target, property, receiver) {
+            if (property === '__graphqlRole') {
+                return role;
+            }
+
+            const value = Reflect.get(target, property, receiver);
+            return typeof value === 'function' ? value.bind(target) : value;
+        },
+    });
+}
+
 async function seedDemoDatabase(client: DemoClient) {
     const ada = await client.user.create({
         data: {
@@ -242,24 +258,32 @@ const schemaFactoryOptions: CreateZenStackGraphQLSchemaFactoryOptions<
 
 const graphqlSchemaFactory = createZenStackGraphQLSchemaFactory(schemaFactoryOptions);
 
-const graphqlHandler = createHonoGraphQLHandler({
+const graphqlApiHandler = new GraphQLApiHandler<
+    DemoGraphQLClient,
+    undefined,
+    DemoRole,
+    typeof schema
+>({
     schema,
+    allowedPaths: [''],
     relay: { enabled: true },
-    async getClient() {
-        return ensureDemoDatabaseReady();
+    getSlicing(request) {
+        return getRoleSlicing(request.client.__graphqlRole ?? DEFAULT_DEMO_ROLE);
     },
-    getContext(request) {
-        return {
-            role: normalizeDemoRole(request.headers.get(DEMO_ROLE_HEADER) ?? undefined),
-        };
-    },
-    getSlicing(_request, context) {
-        return getRoleSlicing(context.role);
-    },
-    getCacheKey({ context }) {
-        return context.role;
+    getCacheKey({ request }) {
+        return request.client.__graphqlRole ?? DEFAULT_DEMO_ROLE;
     },
     extensions: serverExtensions,
+});
+
+const graphqlHandler = createHonoHandler({
+    apiHandler: graphqlApiHandler,
+    async getClient(c) {
+        await ensureDemoDatabaseReady();
+        return createGraphQLClient(
+            normalizeDemoRole(c.req.raw.headers.get(DEMO_ROLE_HEADER) ?? undefined)
+        );
+    },
 });
 
 async function main() {
@@ -298,7 +322,7 @@ async function main() {
         return c.json({ ok: true });
     });
 
-    app.all('/api/graphql', (c) => graphqlHandler(c));
+    app.use('/api/graphql/*', graphqlHandler);
 
     serve(
         {

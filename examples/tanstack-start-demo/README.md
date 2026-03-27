@@ -1,6 +1,7 @@
 # TanStack Start Demo
 
-This example shows `zenstack-graphql` mounted through TanStack Start server routes while keeping the same ZenStack SQLite flow as the other demos.
+This example shows `zenstack-graphql` mounted through ZenStack's real TanStack Start server adapter,
+using `GraphQLApiHandler` as the framework-agnostic API handler.
 
 ## Run
 

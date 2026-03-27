@@ -5,6 +5,14 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cbsmith402/zenstack-graphql.git"
+  },
+  "homepage": "https://github.com/cbsmith402/zenstack-graphql#readme",
+  "bugs": {
+    "url": "https://github.com/cbsmith402/zenstack-graphql/issues"
+  },
   "engines": {
     "node": ">=18.17"
   },
@@ -25,18 +33,6 @@
       "types": "./dist/fetch.d.ts",
       "import": "./dist/fetch.js"
     },
-    "./next": {
-      "types": "./dist/next.d.ts",
-      "import": "./dist/next.js"
-    },
-    "./express": {
-      "types": "./dist/express.d.ts",
-      "import": "./dist/express.js"
-    },
-    "./hono": {
-      "types": "./dist/hono.d.ts",
-      "import": "./dist/hono.js"
-    },
     "./hasura": {
       "types": "./dist/hasura.d.ts",
       "import": "./dist/hasura.js"
@@ -54,15 +50,6 @@
       "fetch": [
         "./dist/fetch.d.ts"
       ],
-      "next": [
-        "./dist/next.d.ts"
-      ],
-      "express": [
-        "./dist/express.d.ts"
-      ],
-      "hono": [
-        "./dist/hono.d.ts"
-      ],
       "hasura": [
         "./dist/hasura.d.ts"
       ]
@@ -73,8 +60,12 @@
     "README.md",
     "CHANGELOG.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "ci:check": "npm run test && npm run typecheck && npm run build && npm pack --dry-run --cache .npm-cache",
     "hasura:import": "node --import tsx scripts/import-hasura-to-zmodel.ts",
     "demo:express:dev": "npm run dev --prefix examples/express-demo",
     "demo:express:typecheck": "npm run typecheck --prefix examples/express-demo",
@@ -85,8 +76,9 @@
     "demo:tanstack:dev": "npm run dev --prefix examples/tanstack-start-demo",
     "demo:tanstack:typecheck": "npm run typecheck --prefix examples/tanstack-start-demo",
     "demo:typecheck": "npm run typecheck --prefix examples/nextjs-demo",
+    "prepublishOnly": "npm run ci:check",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "keywords": [
     "graphql",
@@ -100,6 +92,7 @@
   "devDependencies": {
     "@types/node": "^24.5.2",
     "@types/pg": "^8.20.0",
+    "@zenstackhq/server": "^3.5.1",
     "graphql": "^16.11.0",
     "pg": "^8.20.0",
     "tsx": "^4.20.5",

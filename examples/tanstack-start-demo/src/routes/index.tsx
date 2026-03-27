@@ -73,8 +73,8 @@ function HomePage() {
                 <div className="eyebrow">TanStack Start Demo</div>
                 <h1>Server routes meet Hasura-style GraphQL.</h1>
                 <p>
-                    This app mounts the fetch-based `zenstack-graphql` adapter through
-                    TanStack Start server routes, backed by a real ZenStack + SQLite setup.
+                    This app mounts `GraphQLApiHandler` through ZenStack&apos;s TanStack Start
+                    server adapter, backed by a real ZenStack + SQLite setup.
                 </p>
             </section>
 

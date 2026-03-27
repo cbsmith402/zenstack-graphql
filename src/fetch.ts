@@ -1,2 +1,2 @@
 export { createFetchGraphQLHandler } from './server-adapters.js';
-export type { CreateGraphQLApiHandlerOptions } from './api-handler.js';
+export type { CreateFetchGraphQLHandlerOptions } from './server-adapters.js';

@@ -14,7 +14,8 @@ import {
     type CreateZenStackGraphQLSchemaFactoryOptions,
     type SchemaSlicingConfig,
 } from 'zenstack-graphql/core';
-import { createExpressGraphQLMiddleware } from 'zenstack-graphql/express';
+import { GraphQLApiHandler } from 'zenstack-graphql/server';
+import { ZenStackMiddleware } from '@zenstackhq/server/express';
 
 import { schema } from './zenstack/schema.js';
 
@@ -25,6 +26,7 @@ const DEFAULT_DEMO_ROLE = 'admin';
 
 type DemoRole = 'admin' | 'user';
 type DemoClient = ClientContract<typeof schema>;
+type DemoGraphQLClient = DemoClient & { __graphqlRole?: DemoRole };
 
 declare global {
     var __ZENSTACK_GRAPHQL_EXPRESS_CLIENT__: DemoClient | undefined;
@@ -144,6 +146,20 @@ function getDemoClient() {
     return globalThis.__ZENSTACK_GRAPHQL_EXPRESS_CLIENT__;
 }
 
+function createGraphQLClient(role: DemoRole): DemoGraphQLClient {
+    const client = getDemoClient();
+    return new Proxy(client as DemoGraphQLClient, {
+        get(target, property, receiver) {
+            if (property === '__graphqlRole') {
+                return role;
+            }
+
+            const value = Reflect.get(target, property, receiver);
+            return typeof value === 'function' ? value.bind(target) : value;
+        },
+    });
+}
+
 async function seedDemoDatabase(client: DemoClient) {
     const ada = await client.user.create({
         data: {
@@ -251,24 +267,32 @@ const schemaFactoryOptions: CreateZenStackGraphQLSchemaFactoryOptions<
 
 const graphqlSchemaFactory = createZenStackGraphQLSchemaFactory(schemaFactoryOptions);
 
-const graphqlMiddleware = createExpressGraphQLMiddleware({
+const graphqlApiHandler = new GraphQLApiHandler<
+    DemoGraphQLClient,
+    undefined,
+    DemoRole,
+    typeof schema
+>({
     schema,
     relay: { enabled: true },
-    async getClient() {
-        return ensureDemoDatabaseReady();
+    getSlicing(request) {
+        return getRoleSlicing(request.client.__graphqlRole ?? DEFAULT_DEMO_ROLE);
     },
-    getContext(req) {
-        return {
-            role: normalizeDemoRole(req.headers?.[DEMO_ROLE_HEADER] as string | undefined),
-        };
-    },
-    getSlicing(req, context) {
-        return getRoleSlicing(context.role);
-    },
-    getCacheKey({ context }) {
-        return context.role;
+    getCacheKey({ request }) {
+        return request.client.__graphqlRole ?? DEFAULT_DEMO_ROLE;
     },
     extensions: serverExtensions,
+});
+
+const graphqlMiddleware = ZenStackMiddleware({
+    apiHandler: graphqlApiHandler,
+    async getClient(req) {
+        await ensureDemoDatabaseReady();
+        return createGraphQLClient(
+            normalizeDemoRole(req.headers[DEMO_ROLE_HEADER] as string | undefined)
+        );
+    },
+    sendResponse: true,
 });
 
 async function main() {

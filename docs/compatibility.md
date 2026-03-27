@@ -98,9 +98,9 @@ If a feature cannot be lowered safely to the ZenStack ORM or a documented provid
 
 Supported:
 
-- Framework-agnostic transport handling through `GraphQLApiHandler`
-- Thin server adapters for fetch/Web `Request`, Next.js route handlers, Express middleware, and Hono
-- Role-aware schema slicing through handler-derived request context
+- A low-level `GraphQLApiHandler` that follows ZenStack's API-handler model: logical request in, logical response out
+- Thin adapters for fetch/Web `Request` and Express, plus convenience wrappers for Next.js route handlers and Hono
+- Role-aware schema slicing through handler/request-derived context
 
 Not supported:
 
