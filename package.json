@@ -78,7 +78,7 @@
     "demo:typecheck": "npm run typecheck --prefix examples/nextjs-demo",
     "prepublishOnly": "npm run ci:check",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --import tsx --test test/**/*.test.ts"
+    "test": "node --import tsx --test test/*.test.ts"
   },
   "keywords": [
     "graphql",
