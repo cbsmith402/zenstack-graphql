@@ -1,6 +1,7 @@
 # Hono Demo
 
-This example shows `zenstack-graphql` mounted through the Hono adapter and Node server runtime.
+This example shows `zenstack-graphql` mounted through ZenStack's real Hono server adapter,
+using `GraphQLApiHandler` as the framework-agnostic API handler.
 
 ## Run
 

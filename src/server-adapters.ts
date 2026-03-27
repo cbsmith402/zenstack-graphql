@@ -1,32 +1,20 @@
-import { GraphQLApiHandler, type CreateGraphQLApiHandlerOptions } from './api-handler.js';
+import { GraphQLApiHandler } from './api-handler.js';
 import type { ZenStackClientLike } from './types.js';
 
-type ExpressRequestLike = {
-    method: string;
-    headers?: Record<string, unknown>;
-    query?: Record<string, unknown>;
-    body?: unknown;
-};
-
-type ExpressResponseLike = {
-    status(code: number): ExpressResponseLike;
-    setHeader(name: string, value: string): void;
-    json(body: unknown): unknown;
-};
-
-type HonoContextLike = {
-    req: {
-        raw: Request;
-    };
-};
-
-function isExpressResponseLike(
-    target: ResponseInit['headers'] | ExpressResponseLike
-): target is ExpressResponseLike {
-    return Boolean(target) && typeof target === 'object' && 'setHeader' in target;
+export interface CreateFetchGraphQLHandlerOptions<
+    TClient extends ZenStackClientLike = ZenStackClientLike,
+    TContext = undefined,
+    TCacheKey = string,
+> {
+    apiHandler: GraphQLApiHandler<TClient, TContext, TCacheKey>;
+    getClient(request: Request): TClient | Promise<TClient>;
+    getContext?(request: Request): TContext | Promise<TContext>;
 }
 
-function applyHeaders(target: ResponseInit['headers'] | ExpressResponseLike, headers?: Record<string, string>) {
+function applyHeaders(
+    target: ResponseInit['headers'],
+    headers?: Record<string, string>
+) {
     if (!headers) {
         return;
     }
@@ -41,32 +29,44 @@ function applyHeaders(target: ResponseInit['headers'] | ExpressResponseLike, hea
         }
         return;
     }
+}
 
-    if (isExpressResponseLike(target)) {
-        for (const [key, value] of Object.entries(headers)) {
-            target.setHeader(key, value);
+function searchParamsToQuery(searchParams: URLSearchParams): Record<string, string | string[]> {
+    const query: Record<string, string | string[]> = {};
+
+    for (const [key, value] of searchParams.entries()) {
+        const existing = query[key];
+        if (existing === undefined) {
+            query[key] = value;
+        } else if (Array.isArray(existing)) {
+            existing.push(value);
+        } else {
+            query[key] = [existing, value];
         }
     }
+
+    return query;
 }
 
 export function createFetchGraphQLHandler<
     TClient extends ZenStackClientLike = ZenStackClientLike,
+    TContext = undefined,
+    TCacheKey = string,
 >(
-    options: CreateGraphQLApiHandlerOptions<TClient, Request, any, any>
+    options: CreateFetchGraphQLHandlerOptions<TClient, TContext, TCacheKey>
 ) {
-    const handler = new GraphQLApiHandler(options);
+    const { apiHandler, getClient, getContext } = options;
 
     return async function handleGraphQL(request: Request) {
-        const body =
-            request.method.toUpperCase() === 'POST'
-                ? await request.text()
-                : undefined;
-        const response = await handler.handle({
+        const body = request.method.toUpperCase() === 'POST' ? await request.text() : undefined;
+        const url = new URL(request.url);
+        const response = await apiHandler.handleRequest({
+            client: await getClient(request),
+            context: await getContext?.(request),
             method: request.method,
-            request,
-            headers: request.headers,
-            searchParams: new URL(request.url),
-            body,
+            path: url.pathname,
+            query: searchParamsToQuery(url.searchParams),
+            requestBody: body,
         });
 
         const headers = new Headers(response.headers);
@@ -74,56 +74,5 @@ export function createFetchGraphQLHandler<
             status: response.status,
             headers,
         });
-    };
-}
-
-export function createNextGraphQLHandler<
-    TClient extends ZenStackClientLike = ZenStackClientLike,
->(
-    options: CreateGraphQLApiHandlerOptions<TClient, Request, any, any>
-) {
-    return createFetchGraphQLHandler(options);
-}
-
-export function createExpressGraphQLMiddleware<
-    TClient extends ZenStackClientLike = ZenStackClientLike,
->(
-    options: CreateGraphQLApiHandlerOptions<TClient, ExpressRequestLike, any, any>
-) {
-    const handler = new GraphQLApiHandler(options);
-
-    return async function graphQLMiddleware(
-        req: ExpressRequestLike,
-        res: ExpressResponseLike,
-        next?: (error: unknown) => void
-    ) {
-        try {
-            const response = await handler.handle({
-                method: req.method,
-                request: req,
-                headers: req.headers,
-                searchParams: req.query,
-                body: req.body,
-            });
-            applyHeaders(res, response.headers);
-            return res.status(response.status).json(response.body);
-        } catch (error) {
-            if (next) {
-                return next(error);
-            }
-            throw error;
-        }
-    };
-}
-
-export function createHonoGraphQLHandler<
-    TClient extends ZenStackClientLike = ZenStackClientLike,
->(
-    options: CreateGraphQLApiHandlerOptions<TClient, Request, any, any>
-) {
-    const handleFetch = createFetchGraphQLHandler(options);
-
-    return async function graphQLHandler(context: HonoContextLike) {
-        return handleFetch(context.req.raw);
     };
 }

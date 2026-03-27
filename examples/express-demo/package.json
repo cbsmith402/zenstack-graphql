@@ -11,7 +11,8 @@
     "zen:generate": "zenstack generate --no-tips"
   },
   "dependencies": {
-    "@zenstackhq/orm": "^3.4.6",
+    "@zenstackhq/server": "^3.5.1",
+    "@zenstackhq/orm": "^3.5.1",
     "better-sqlite3": "^12.8.0",
     "express": "^5.1.0",
     "graphql": "^16.11.0",
@@ -21,7 +22,7 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/express": "^5.0.3",
     "@types/node": "^24.5.2",
-    "@zenstackhq/cli": "^3.4.6",
+    "@zenstackhq/cli": "^3.5.1",
     "tsx": "^4.20.5",
     "typescript": "^5.9.2"
   },

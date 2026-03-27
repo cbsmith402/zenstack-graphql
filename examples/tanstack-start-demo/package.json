@@ -13,7 +13,8 @@
   "dependencies": {
     "@tanstack/react-router": "^1.168.3",
     "@tanstack/react-start": "^1.167.5",
-    "@zenstackhq/orm": "^3.4.6",
+    "@zenstackhq/orm": "^3.5.1",
+    "@zenstackhq/server": "^3.5.1",
     "better-sqlite3": "^12.8.0",
     "graphql": "^16.11.0",
     "react": "^19.2.0",
@@ -26,7 +27,7 @@
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
     "@vitejs/plugin-react": "^5.1.0",
-    "@zenstackhq/cli": "^3.4.6",
+    "@zenstackhq/cli": "^3.5.1",
     "typescript": "^5.9.2",
     "vite": "^8.0.2"
   },

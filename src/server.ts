@@ -1,7 +1,11 @@
 export { GraphQLApiHandler } from './api-handler.js';
 export { createFetchGraphQLHandler } from './fetch.js';
+export type { CreateGraphQLApiHandlerOptions } from './api-handler.js';
+export type { CreateFetchGraphQLHandlerOptions } from './server-adapters.js';
 export type {
-    CreateGraphQLApiHandlerOptions,
-    GraphQLHandlerRequest,
-    GraphQLHandlerResponse,
-} from './api-handler.js';
+    GraphQLApiRequestContext,
+    GraphQLApiResponse,
+    LogConfig,
+    LogLevel,
+    Logger,
+} from './types.js';

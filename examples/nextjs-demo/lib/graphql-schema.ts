@@ -1,18 +1,20 @@
 import {
     GraphQLNonNull,
     GraphQLString,
-    createNextGraphQLHandler,
+    GraphQLApiHandler,
     createZenStackGraphQLSchemaFactory,
     printSchema,
-    type CreateGraphQLApiHandlerOptions,
     type CreateZenStackGraphQLSchemaFactoryOptions,
     type SchemaSlicingConfig,
 } from 'zenstack-graphql';
+import { NextRequestHandler } from '@zenstackhq/server/next';
 
 import { ensureDemoDatabaseReady } from './zenstack-demo';
 import { schema } from '@/zenstack/schema';
 
 export type DemoRole = 'admin' | 'user';
+type DemoClient = Awaited<ReturnType<typeof ensureDemoDatabaseReady>>;
+type DemoGraphQLClient = DemoClient & { __graphqlRole?: DemoRole };
 
 export const DEFAULT_DEMO_ROLE: DemoRole = 'admin';
 export const DEMO_ROLE_HEADER = 'x-hasura-role';
@@ -47,21 +49,6 @@ const serverExtensions = {
     },
 };
 
-const roleSlicing = (_request: Request, context: { role: DemoRole }): SchemaSlicingConfig | undefined => {
-    if (context.role !== 'user') {
-        return undefined;
-    }
-
-    return {
-        models: {
-            user: {
-                excludedFields: ['age'],
-                excludedOperations: ['deleteMany', 'deleteByPk'],
-            },
-        },
-    };
-};
-
 const schemaFactoryOptions: CreateZenStackGraphQLSchemaFactoryOptions<
     Awaited<ReturnType<typeof ensureDemoDatabaseReady>>,
     { role: DemoRole },
@@ -92,32 +79,57 @@ const schemaFactoryOptions: CreateZenStackGraphQLSchemaFactoryOptions<
     extensions: serverExtensions,
 };
 
-const graphQLHandlerOptions: CreateGraphQLApiHandlerOptions<
-    Awaited<ReturnType<typeof ensureDemoDatabaseReady>>,
-    Request,
-    { role: DemoRole },
-    DemoRole
-> = {
+const graphQLApiHandler = new GraphQLApiHandler<
+    DemoGraphQLClient,
+    undefined,
+    DemoRole,
+    typeof schema
+>({
     schema,
+    allowedPaths: [''],
     relay: { enabled: true },
-    async getClient() {
-        return ensureDemoDatabaseReady();
+    getSlicing(request) {
+        return request.client.__graphqlRole === 'user'
+            ? {
+                  models: {
+                      user: {
+                          excludedFields: ['age'],
+                          excludedOperations: ['deleteMany', 'deleteByPk'],
+                      },
+                  },
+              }
+            : undefined;
     },
-    getContext(request: Request) {
-        return {
-            role: normalizeDemoRole(request.headers.get(DEMO_ROLE_HEADER)),
-        };
-    },
-    getSlicing: roleSlicing,
-    getCacheKey({ context }) {
-        return context.role;
+    getCacheKey({ request }) {
+        return request.client.__graphqlRole ?? DEFAULT_DEMO_ROLE;
     },
     extensions: serverExtensions,
-};
+});
 
 export const graphqlSchemaFactory = createZenStackGraphQLSchemaFactory(schemaFactoryOptions);
 
-export const handleGraphQLRequest = createNextGraphQLHandler(graphQLHandlerOptions);
+function createGraphQLClient(role: DemoRole): Promise<DemoGraphQLClient> {
+    return ensureDemoDatabaseReady().then((client) =>
+        new Proxy(client as DemoGraphQLClient, {
+            get(target, property, receiver) {
+                if (property === '__graphqlRole') {
+                    return role;
+                }
+
+                const value = Reflect.get(target, property, receiver);
+                return typeof value === 'function' ? value.bind(target) : value;
+            },
+        })
+    );
+}
+
+export const nextGraphQLHandler = NextRequestHandler({
+    apiHandler: graphQLApiHandler,
+    async getClient(request) {
+        return createGraphQLClient(normalizeDemoRole(request.headers.get(DEMO_ROLE_HEADER)));
+    },
+    useAppDir: true,
+});
 
 export async function getGraphqlSchemaSDL(role: DemoRole = DEFAULT_DEMO_ROLE) {
     return printSchema(await graphqlSchemaFactory.getSchema({ role }));

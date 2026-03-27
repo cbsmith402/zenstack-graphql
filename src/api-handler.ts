@@ -2,8 +2,6 @@ import {
     getOperationAST,
     parse,
     type ExecutionResult,
-    type GraphQLArgs,
-    type GraphQLSchema,
 } from 'graphql';
 
 import {
@@ -11,43 +9,38 @@ import {
     type CreateZenStackGraphQLSchemaFactoryOptions,
     type ZenStackGraphQLSchemaFactory,
 } from './schema-factory.js';
-import { graphql } from './execution.js';
 import type {
-    GraphQLHandlerRequest,
-    GraphQLHandlerResponse,
+    GraphQLApiRequestContext,
+    GraphQLApiResponse,
+    LogConfig,
+    SchemaInput,
     SchemaSlicingConfig,
     ZenStackClientLike,
 } from './types.js';
 
-type HandlerExecutionContext<TRequest, TContext> = {
-    request: TRequest;
-    context: TContext;
-};
-
 export interface CreateGraphQLApiHandlerOptions<
     TClient extends ZenStackClientLike = ZenStackClientLike,
-    TRequest = unknown,
     TContext = undefined,
     TCacheKey = string,
+    TSchema extends SchemaInput = SchemaInput,
 > extends Omit<
         CreateZenStackGraphQLSchemaFactoryOptions<
             TClient,
-            HandlerExecutionContext<TRequest, TContext>,
-            TCacheKey
+            GraphQLApiRequestContext<TClient, TContext>,
+            TCacheKey,
+            TSchema
         >,
         'getClient' | 'getSlicing' | 'getCacheKey'
     > {
-    getClient(request: TRequest, context: TContext): TClient | Promise<TClient>;
-    getContext?(request: TRequest): TContext | Promise<TContext>;
+    log?: LogConfig;
     getSlicing?(
-        request: TRequest,
-        context: TContext
+        request: GraphQLApiRequestContext<TClient, TContext>
     ): SchemaSlicingConfig | undefined | Promise<SchemaSlicingConfig | undefined>;
     getCacheKey?(input: {
-        request: TRequest;
-        context: TContext;
+        request: GraphQLApiRequestContext<TClient, TContext>;
         slicing: SchemaSlicingConfig | undefined;
     }): TCacheKey | Promise<TCacheKey>;
+    allowedPaths?: string[];
 }
 
 type GraphQLOperationInput = {
@@ -60,7 +53,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function transportError(status: number, message: string): GraphQLHandlerResponse {
+function transportError(status: number, message: string): GraphQLApiResponse {
     return {
         status,
         headers: {
@@ -72,20 +65,19 @@ function transportError(status: number, message: string): GraphQLHandlerResponse
     };
 }
 
-function getSearchParamValue(
-    searchParams: GraphQLHandlerRequest['searchParams'],
+function normalizeRequestPath(path: string): string {
+    return path.replace(/^\/+|\/+$/g, '');
+}
+
+function getQueryValue(
+    query: GraphQLApiRequestContext['query'],
     key: string
 ): unknown {
-    if (!searchParams) {
+    if (!query) {
         return undefined;
     }
-    if (searchParams instanceof URL) {
-        return searchParams.searchParams.get(key) ?? undefined;
-    }
-    if (searchParams instanceof URLSearchParams) {
-        return searchParams.get(key) ?? undefined;
-    }
-    return searchParams[key];
+    const value = query[key];
+    return Array.isArray(value) ? value[0] : value;
 }
 
 function parseVariables(value: unknown): Record<string, unknown> | undefined {
@@ -122,19 +114,19 @@ function parseRequestBody(body: unknown): Record<string, unknown> | undefined {
     return body;
 }
 
-function parseOperationInput(request: GraphQLHandlerRequest): GraphQLOperationInput {
+function parseOperationInput(request: GraphQLApiRequestContext): GraphQLOperationInput {
     const method = request.method.toUpperCase();
     if (method === 'GET') {
-        const query = getSearchParamValue(request.searchParams, 'query');
+        const query = getQueryValue(request.query, 'query');
         if (typeof query !== 'string' || query.length === 0) {
             throw new Error('A GraphQL "query" string is required.');
         }
         return {
             query,
-            variables: parseVariables(getSearchParamValue(request.searchParams, 'variables')),
+            variables: parseVariables(getQueryValue(request.query, 'variables')),
             operationName:
-                typeof getSearchParamValue(request.searchParams, 'operationName') === 'string'
-                    ? (getSearchParamValue(request.searchParams, 'operationName') as string)
+                typeof getQueryValue(request.query, 'operationName') === 'string'
+                    ? (getQueryValue(request.query, 'operationName') as string)
                     : undefined,
         };
     }
@@ -145,7 +137,7 @@ function parseOperationInput(request: GraphQLHandlerRequest): GraphQLOperationIn
         });
     }
 
-    const body = parseRequestBody(request.body);
+    const body = parseRequestBody(request.requestBody);
     if (!body) {
         throw new Error('A GraphQL "query" string is required.');
     }
@@ -171,7 +163,7 @@ function assertGetOperationIsQuery(input: GraphQLOperationInput) {
     }
 }
 
-function jsonResponse(body: unknown, status = 200): GraphQLHandlerResponse {
+function jsonResponse(body: unknown, status = 200): GraphQLApiResponse {
     return {
         status,
         headers: {
@@ -183,62 +175,101 @@ function jsonResponse(body: unknown, status = 200): GraphQLHandlerResponse {
 
 export class GraphQLApiHandler<
     TClient extends ZenStackClientLike = ZenStackClientLike,
-    TRequest = unknown,
     TContext = undefined,
     TCacheKey = string,
+    TSchema extends SchemaInput = SchemaInput,
 > {
     private readonly schemaFactory: ZenStackGraphQLSchemaFactory<
-        HandlerExecutionContext<TRequest, TContext>,
+        GraphQLApiRequestContext<TClient, TContext>,
         TCacheKey
+    >;
+
+    private readonly schemaOptions: Omit<
+        CreateGraphQLApiHandlerOptions<TClient, TContext, TCacheKey, TSchema>,
+        'log' | 'getSlicing' | 'getCacheKey' | 'allowedPaths'
     >;
 
     constructor(
         private readonly options: CreateGraphQLApiHandlerOptions<
             TClient,
-            TRequest,
             TContext,
-            TCacheKey
+            TCacheKey,
+            TSchema
         >
     ) {
-        const { getClient, getContext, getSlicing, getCacheKey, ...schemaOptions } = options;
-        this.schemaFactory = createZenStackGraphQLSchemaFactory({
-            ...schemaOptions,
-            getClient: async (value) => getClient(value.request, value.context),
-            getSlicing: getSlicing
-                ? async (value) => getSlicing(value.request, value.context)
+        const {
+            log: _log,
+            getSlicing: _getSlicing,
+            getCacheKey: _getCacheKey,
+            allowedPaths: _allowedPaths,
+            ...schemaOptions
+        } = options;
+        this.schemaOptions = schemaOptions;
+        const resolveSlicing = this.options.getSlicing;
+        const resolveCacheKey = this.options.getCacheKey;
+        this.schemaFactory = createZenStackGraphQLSchemaFactory<
+            TClient,
+            GraphQLApiRequestContext<TClient, TContext>,
+            TCacheKey,
+            TSchema
+        >({
+            ...this.schemaOptions,
+            getClient: async (request) => request.client,
+            getSlicing: resolveSlicing
+                ? async (request) => resolveSlicing(request)
                 : undefined,
-            getCacheKey: getCacheKey
+            getCacheKey: resolveCacheKey
                 ? async (value) =>
-                      getCacheKey({
-                          request: value.context.request,
-                          context: value.context.context,
+                      resolveCacheKey({
+                          request: value.context,
                           slicing: value.slicing,
                       })
                 : undefined,
         });
     }
 
-    async getSchema(request: TRequest): Promise<GraphQLSchema> {
-        const context = await this.resolveContext(request);
-        return this.schemaFactory.getSchema({ request, context });
+    get schema(): TSchema {
+        return this.options.schema;
+    }
+
+    get log(): LogConfig | undefined {
+        return this.options.log;
+    }
+
+    async getSchema(context?: TContext) {
+        return this.schemaFactory.getSchema({
+            client: undefined as unknown as TClient,
+            method: 'GET',
+            path: '/',
+            context,
+        });
     }
 
     async execute(
-        request: TRequest,
+        request: GraphQLApiRequestContext<TClient, TContext>,
         input: GraphQLOperationInput
     ): Promise<ExecutionResult> {
-        const context = await this.resolveContext(request);
         return this.schemaFactory.execute({
-            contextValue: { request, context },
+            contextValue: request,
             source: input.query,
             variableValues: input.variables,
             operationName: input.operationName,
         });
     }
 
-    async handle(
-        request: GraphQLHandlerRequest<TRequest>
-    ): Promise<GraphQLHandlerResponse> {
+    async handleRequest(
+        request: GraphQLApiRequestContext<TClient, TContext>
+    ): Promise<GraphQLApiResponse> {
+        if (this.options.allowedPaths && this.options.allowedPaths.length > 0) {
+            const normalizedRequestPath = normalizeRequestPath(request.path);
+            const isAllowed = this.options.allowedPaths.some(
+                (path) => normalizeRequestPath(path) === normalizedRequestPath
+            );
+            if (!isAllowed) {
+                return transportError(404, `Unsupported GraphQL path "${request.path}".`);
+            }
+        }
+
         let input: GraphQLOperationInput;
         try {
             input = parseOperationInput(request);
@@ -253,16 +284,7 @@ export class GraphQLApiHandler<
             return transportError(status, message);
         }
 
-        const result = await this.execute(request.request, input);
+        const result = await this.execute(request, input);
         return jsonResponse(result, 200);
     }
-
-    private async resolveContext(request: TRequest): Promise<TContext> {
-        return (await this.options.getContext?.(request)) as TContext;
-    }
 }
-
-export type {
-    GraphQLHandlerRequest,
-    GraphQLHandlerResponse,
-};

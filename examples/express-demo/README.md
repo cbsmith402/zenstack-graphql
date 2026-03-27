@@ -1,6 +1,7 @@
 # Express Demo
 
-This example shows `zenstack-graphql` mounted through the Express middleware adapter.
+This example shows `zenstack-graphql` mounted through ZenStack's real Express server adapter,
+using `GraphQLApiHandler` as the framework-agnostic API handler.
 
 ## Run
 

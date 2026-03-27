@@ -8,6 +8,7 @@ import { graphql } from './execution.js';
 import { createZenStackGraphQLSchema } from './schema.js';
 import type {
     CreateZenStackGraphQLSchemaOptions,
+    SchemaInput,
     SchemaSlicingConfig,
     ZenStackClientLike,
 } from './types.js';
@@ -16,7 +17,8 @@ export interface CreateZenStackGraphQLSchemaFactoryOptions<
     TClient extends ZenStackClientLike = ZenStackClientLike,
     TContext = unknown,
     TCacheKey = string,
-> extends Omit<CreateZenStackGraphQLSchemaOptions<TClient, TContext>, 'slicing'> {
+    TSchema extends SchemaInput = SchemaInput,
+> extends Omit<CreateZenStackGraphQLSchemaOptions<TClient, TContext, TSchema>, 'slicing'> {
     getSlicing?(
         context: TContext
     ): SchemaSlicingConfig | undefined | Promise<SchemaSlicingConfig | undefined>;
@@ -53,8 +55,9 @@ export function createZenStackGraphQLSchemaFactory<
     TClient extends ZenStackClientLike,
     TContext,
     TCacheKey = string,
+    TSchema extends SchemaInput = SchemaInput,
 >(
-    options: CreateZenStackGraphQLSchemaFactoryOptions<TClient, TContext, TCacheKey>
+    options: CreateZenStackGraphQLSchemaFactoryOptions<TClient, TContext, TCacheKey, TSchema>
 ): ZenStackGraphQLSchemaFactory<TContext, TCacheKey> {
     const { getSlicing, getCacheKey, ...schemaOptions } = options;
     const cache = new Map<TCacheKey, GraphQLSchema>();
