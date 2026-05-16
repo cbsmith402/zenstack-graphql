@@ -4,6 +4,7 @@ on:
   release:
     types:
       - published
+      - edited
   workflow_dispatch:
 
 concurrency:
@@ -11,11 +12,48 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
+  update-changelog:
+    if: github.event_name == 'release' && github.event.release.draft == false
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out default branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Update changelog from release notes
+        run: node scripts/update-changelog-from-release.mjs
+        env:
+          CHANGELOG_PATH: CHANGELOG.md
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          RELEASE_PUBLISHED_AT: ${{ github.event.release.published_at || github.event.release.created_at }}
+
+      - name: Commit changelog update
+        run: |
+          if git diff --quiet -- CHANGELOG.md; then
+            echo "CHANGELOG.md already matches release notes"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for ${{ github.event.release.tag_name }}"
+          git push origin HEAD:${{ github.event.repository.default_branch }}
+
   publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.action == 'published'
     runs-on: ubuntu-latest
 
     steps:
