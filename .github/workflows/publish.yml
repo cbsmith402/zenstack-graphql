@@ -35,6 +35,8 @@ jobs:
             examples/express-demo/package-lock.json
             examples/hono-demo/package-lock.json
             examples/tanstack-start-demo/package-lock.json
+            
+      - run: npm install -g npm@latest
 
       - name: Install root dependencies
         run: npm ci
