@@ -2,6 +2,23 @@
 
 All notable changes to `zenstack-graphql` will be documented in this file.
 
+## 0.2.2 - 2026-05-16
+
+Maintenance release focused on package publishing and the Hasura importer CLI.
+
+### Added
+
+- published the Hasura importer as the `zenstack-graphql-hasura-import` package binary so it can be run from an installed npm package
+
+### Fixed
+
+- fixed the Hasura importer packaging so its runtime dependencies are installed for package consumers
+- fixed CLI execution when launched through npm's `node_modules/.bin` symlinked binary path
+
+### Changed
+
+- updated the release workflow to install the latest npm before publishing
+
 ## 0.2.1 - 2026-05-16
 
 Maintenance release focused on dependency refreshes, example app polish, and publish pipeline cleanup.
