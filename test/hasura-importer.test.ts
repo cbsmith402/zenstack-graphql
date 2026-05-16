@@ -2,6 +2,7 @@ import * as assert from 'node:assert/strict';
 import path from 'node:path';
 import { test } from 'node:test';
 
+import { parseArgs, runHasuraImportCli } from '../src/cli/import-hasura-to-zmodel.js';
 import {
     introspectPostgresSource,
     loadHasuraMetadata,
@@ -263,4 +264,56 @@ test('captures real-world style TODOs for unsupported list relation permission p
     const users = result.entities.find((entity) => entity.modelName === 'PublicUsers');
     assert.ok(users);
     assert.ok(users.policies.some((policy) => policy.includes(`auth().role == 'admin'`)));
+});
+
+test('CLI parser supports repeated schema filters and boolean include-views overrides', () => {
+    const parsed = parseArgs([
+        '--metadata-dir',
+        './metadata',
+        '--database-url',
+        'postgres://example',
+        '--schema-filter',
+        'public,reporting',
+        '--schema-filter',
+        'audit',
+        '--include-views',
+        'false',
+        '--stdout',
+    ]);
+
+    assert.equal(parsed.metadataDir, './metadata');
+    assert.equal(parsed.databaseUrl, 'postgres://example');
+    assert.deepEqual(parsed.schemaFilter, ['public', 'reporting', 'audit']);
+    assert.equal(parsed.includeViews, false);
+    assert.equal(parsed.stdout, true);
+});
+
+test('CLI parser recognizes help flags', () => {
+    assert.equal(parseArgs(['--help']).help, true);
+    assert.equal(parseArgs(['-h']).help, true);
+});
+
+test('CLI prints help without requiring other arguments', async () => {
+    let output = '';
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+        output += typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+        return true;
+    }) as typeof process.stdout.write;
+
+    try {
+        await runHasuraImportCli(['--help']);
+    } finally {
+        process.stdout.write = originalWrite;
+    }
+
+    assert.match(output, /Usage: zenstack-graphql-hasura-import/);
+    assert.match(output, /--metadata-dir <dir>/);
+});
+
+test('CLI requires either --out or --stdout before attempting import', async () => {
+    await assert.rejects(
+        runHasuraImportCli(['--metadata-dir', fixtureDir, '--database-url', 'postgres://example']),
+        /--out is required unless --stdout is used/
+    );
 });

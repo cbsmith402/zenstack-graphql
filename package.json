@@ -5,6 +5,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "zenstack-graphql-hasura-import": "./dist/cli/import-hasura-to-zmodel.js"
+  },
   "repository": {
     "type": "git",
     "url": "https://github.com/cbsmith402/zenstack-graphql.git"
@@ -66,7 +69,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "ci:check": "npm run test && npm run typecheck && npm run build && npm pack --dry-run --cache .npm-cache",
-    "hasura:import": "node --import tsx scripts/import-hasura-to-zmodel.ts",
+    "hasura:import": "node --import tsx src/cli/import-hasura-to-zmodel.ts",
     "demo:express:dev": "npm run dev --prefix examples/express-demo",
     "demo:express:typecheck": "npm run typecheck --prefix examples/express-demo",
     "demo:build": "npm run build --prefix examples/nextjs-demo",
@@ -86,6 +89,10 @@
     "zenstack"
   ],
   "license": "MIT",
+  "dependencies": {
+    "pg": "^8.20.0",
+    "yaml": "^2.8.3"
+  },
   "peerDependencies": {
     "graphql": "^16.11.0"
   },
@@ -94,9 +101,7 @@
     "@types/pg": "^8.20.0",
     "@zenstackhq/server": "^3.7.0",
     "graphql": "^16.11.0",
-    "pg": "^8.20.0",
     "tsx": "^4.20.5",
-    "typescript": "^5.9.2",
-    "yaml": "^2.8.3"
+    "typescript": "^5.9.2"
   }
 }

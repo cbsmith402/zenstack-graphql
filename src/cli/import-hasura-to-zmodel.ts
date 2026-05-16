@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
+import { realpathSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
-import { importHasuraToZModel } from '../src/hasura-importer.js';
+import { importHasuraToZModel } from '../hasura-importer.js';
 
 type CliOptions = {
     metadataDir?: string;
@@ -14,14 +16,30 @@ type CliOptions = {
     schemaFilter: string[];
     stdout: boolean;
     report: boolean;
+    help: boolean;
 };
 
-function parseArgs(argv: string[]): CliOptions {
+const HELP_TEXT = `Usage: zenstack-graphql-hasura-import --metadata-dir <dir> --database-url <url> [options]
+
+Options:
+  --metadata-dir <dir>     Path to a Hasura metadata export directory
+  --database-url <url>     Postgres connection string for live introspection
+  --source <name>          Hasura source name to import (default: default)
+  --out <file>             Write the generated ZModel to a file
+  --stdout                 Write the generated ZModel to stdout
+  --report                 Write an import summary to stderr
+  --include-views [bool]   Include tracked views (default: true)
+  --schema-filter <list>   Comma-separated list of schemas to include
+  -h, --help               Show this help text
+`;
+
+export function parseArgs(argv: string[]): CliOptions {
     const options: CliOptions = {
         includeViews: true,
         schemaFilter: [],
         stdout: false,
         report: false,
+        help: false,
     };
 
     for (let index = 0; index < argv.length; index++) {
@@ -62,6 +80,10 @@ function parseArgs(argv: string[]): CliOptions {
             case '--report':
                 options.report = true;
                 break;
+            case '--help':
+            case '-h':
+                options.help = true;
+                break;
             default:
                 if (arg.startsWith('--')) {
                     throw new Error(`Unknown argument: ${arg}`);
@@ -99,8 +121,12 @@ function renderReport(result: Awaited<ReturnType<typeof importHasuraToZModel>>['
     return lines.join('\n');
 }
 
-async function main() {
-    const options = parseArgs(process.argv.slice(2));
+export async function runHasuraImportCli(argv: string[]) {
+    const options = parseArgs(argv);
+    if (options.help) {
+        process.stdout.write(HELP_TEXT);
+        return;
+    }
     if (!options.metadataDir) {
         throw new Error('--metadata-dir is required');
     }
@@ -130,8 +156,23 @@ async function main() {
     }
 }
 
-main().catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`import-hasura-to-zmodel failed: ${message}\n`);
-    process.exitCode = 1;
-});
+function isExecutedDirectly() {
+    const argvPath = process.argv[1];
+    if (!argvPath) {
+        return false;
+    }
+
+    try {
+        return pathToFileURL(realpathSync(argvPath)).href === import.meta.url;
+    } catch {
+        return pathToFileURL(path.resolve(argvPath)).href === import.meta.url;
+    }
+}
+
+if (isExecutedDirectly()) {
+    runHasuraImportCli(process.argv.slice(2)).catch((error) => {
+        const message = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`import-hasura-to-zmodel failed: ${message}\n`);
+        process.exitCode = 1;
+    });
+}

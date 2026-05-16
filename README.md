@@ -355,8 +355,22 @@ That helper intentionally stays small. It standardizes:
 
 ## Hasura Importer
 
-For one-off migrations, the repo now includes a CLI that can turn a Hasura Postgres metadata export
+For one-off migrations, the package includes a CLI that can turn a Hasura Postgres metadata export
 plus live Postgres introspection into a best-effort `schema.zmodel`.
+
+If you have `zenstack-graphql` installed in a project, you can run the published binary with `npx`
+or from an npm script:
+
+```bash
+npx zenstack-graphql-hasura-import \
+  --metadata-dir /path/to/hasura/metadata \
+  --database-url "$DATABASE_URL" \
+  --source default \
+  --out ./schema.zmodel \
+  --report
+```
+
+For local development in this repo, the existing npm script still works:
 
 ```bash
 npm run hasura:import -- \
