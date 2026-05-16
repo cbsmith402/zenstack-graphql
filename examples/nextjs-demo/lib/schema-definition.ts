@@ -1,7 +1,8 @@
 export const sampleOperations = [
     {
         label: 'Nested Query',
-        description: 'Read real SQLite-backed ZenStack models with nested posts and aggregates.',
+        description:
+            'Compare the admin and user roles to see ZenStack permission policies filter rows and nested posts.',
         query: `query NestedUsers {
   users(order_by: [{ age: desc }]) {
     id
@@ -31,7 +32,8 @@ export const sampleOperations = [
     },
     {
         label: 'Mutation Flow',
-        description: 'Mutate real rows in SQLite through the generated ZenStack schema.',
+        description:
+            'Run as admin to create/update users, then switch to user to see policy rejections for the same mutation roots.',
         query: `mutation MutationFlow {
   insert_users_one(object: { name: "Cara", age: 25, role: USER }) {
     id

@@ -6,6 +6,7 @@ import express from 'express';
 import { ZenStackClient } from '@zenstackhq/orm';
 import type { ClientContract } from '@zenstackhq/orm';
 import { SqliteDialect } from '@zenstackhq/orm/dialects/sqlite';
+import { PolicyPlugin } from '@zenstackhq/plugin-policy';
 import {
     GraphQLNonNull,
     GraphQLString,
@@ -27,6 +28,11 @@ const DEFAULT_DEMO_ROLE = 'admin';
 type DemoRole = 'admin' | 'user';
 type DemoClient = ClientContract<typeof schema>;
 type DemoGraphQLClient = DemoClient & { __graphqlRole?: DemoRole };
+type DemoAuthUser = {
+    id: number;
+    name: string;
+    role: 'ADMIN' | 'USER';
+};
 
 declare global {
     var __ZENSTACK_GRAPHQL_EXPRESS_CLIENT__: DemoClient | undefined;
@@ -35,7 +41,7 @@ declare global {
 
 const sampleOperations = [
     {
-        label: 'Nested Query',
+        label: 'Policy-filtered Query',
         query: `query NestedUsers {
   users(order_by: [{ age: desc }]) {
     id
@@ -79,6 +85,11 @@ const sampleOperations = [
 }`,
     },
 ];
+
+const DEMO_AUTH_USERS: Record<DemoRole, DemoAuthUser> = {
+    admin: { id: 1, name: 'Ada', role: 'ADMIN' },
+    user: { id: 2, name: 'Ben', role: 'USER' },
+};
 
 const serverExtensions = {
     query: {
@@ -147,7 +158,9 @@ function getDemoClient() {
 }
 
 function createGraphQLClient(role: DemoRole): DemoGraphQLClient {
-    const client = getDemoClient();
+    const client = getDemoClient()
+        .$use(new PolicyPlugin())
+        .$setAuth(DEMO_AUTH_USERS[role]);
     return new Proxy(client as DemoGraphQLClient, {
         get(target, property, receiver) {
             if (property === '__graphqlRole') {
@@ -322,6 +335,7 @@ async function main() {
     app.get('/api/state', async (_req, res) => {
         res.json({
             databasePath: DATABASE_PATH,
+            demoActors: DEMO_AUTH_USERS,
             users: await getDemoSnapshot(),
         });
     });

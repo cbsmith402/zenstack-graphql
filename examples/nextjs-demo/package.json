@@ -12,8 +12,9 @@
     "zen:generate": "zenstack generate --no-tips"
   },
   "dependencies": {
-    "@zenstackhq/orm": "^3.5.1",
-    "@zenstackhq/server": "^3.5.1",
+    "@zenstackhq/orm": "^3.7.0",
+    "@zenstackhq/plugin-policy": "^3.7.0",
+    "@zenstackhq/server": "^3.7.0",
     "better-sqlite3": "^12.8.0",
     "graphql": "^16.11.0",
     "next": "^16.0.1",
@@ -26,7 +27,7 @@
     "@types/node": "^24.5.2",
     "@types/react": "^19.2.2",
     "@types/react-dom": "^19.2.2",
-    "@zenstackhq/cli": "^3.5.1",
+    "@zenstackhq/cli": "^3.7.0",
     "typescript": "^5.9.2"
   },
   "zenstack": {

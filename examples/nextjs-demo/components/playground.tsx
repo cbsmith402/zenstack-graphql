@@ -124,7 +124,8 @@ export function Playground({
                             This sample wraps the local <code>zenstack-graphql</code> package in a
                             Next.js App Router project. The API route runs against a real ZenStack
                             schema backed by SQLite, so you can try queries, mutations, transaction
-                            rollbacks, and Hasura-style role-based schema pruning end to end.
+                            rollbacks, Hasura-style schema pruning, and ZenStack permission
+                            policies end to end.
                         </p>
                         <div className="pill-row">
                             <span className="pill">Hasura-style root fields</span>
@@ -132,7 +133,7 @@ export function Playground({
                             <span className="pill">Nested relation reads</span>
                             <span className="pill">Aggregates + CRUD mutations</span>
                             <span className="pill">JSON + between filters</span>
-                            <span className="pill">Header-based role slicing</span>
+                            <span className="pill">Header-bound auth policies</span>
                         </div>
                     </div>
                     <div className="card pad">
@@ -158,9 +159,9 @@ npm run dev`}</pre>
                     </span>
                 </div>
                 <div className="meta-box">
-                    <strong>Schema SDL</strong>
+                    <strong>Schema + Auth Header</strong>
                     <span className="muted">
-                        GET <code>/api/schema</code> with <code>x-hasura-role</code>
+                        GET <code>/api/schema</code> and POST <code>/api/graphql</code> with <code>x-hasura-role</code>
                     </span>
                 </div>
                 <div className="meta-box">
@@ -170,9 +171,9 @@ npm run dev`}</pre>
                     </span>
                 </div>
                 <div className="meta-box">
-                    <strong>Current SQLite State</strong>
+                    <strong>Raw SQLite State</strong>
                     <span className="muted">
-                        GET <code>/api/state</code>
+                        GET <code>/api/state</code> to compare seeded rows with policy-filtered results
                     </span>
                 </div>
                 <div className="meta-box">

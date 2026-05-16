@@ -5,8 +5,9 @@ export const DEMO_ROLE_HEADER = 'x-hasura-role';
 
 export const sampleOperations = [
     {
-        label: 'Nested Query',
-        description: 'Read SQLite-backed ZenStack rows with nested posts.',
+        label: 'Policy-filtered Query',
+        description:
+            'Switch between admin and user to watch ZenStack permission policies filter users and nested posts.',
         query: `query NestedUsers {
   users(order_by: [{ age: desc }]) {
     id
@@ -23,7 +24,7 @@ export const sampleOperations = [
     },
     {
         label: 'Procedure Root',
-        description: 'Call a ZenStack procedure exposed as a GraphQL query.',
+        description: 'Call a ZenStack procedure and see policy-filtered rows flow through the result.',
         query: `query ProcedureRoot {
   getUserFeeds(userId: 1, limit: 2) {
     id

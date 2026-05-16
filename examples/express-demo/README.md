@@ -16,4 +16,5 @@ Then visit:
 - `http://localhost:4001/api/schema`
 - `http://localhost:4001/api/graphql`
 
-Use the `x-hasura-role` header with `admin` or `user` to switch schema slices.
+Use the `x-hasura-role` header with `admin` or `user` to switch both schema slices and
+ZenStack permission policies. `admin` is bound to seeded user Ada, and `user` is bound to Ben.

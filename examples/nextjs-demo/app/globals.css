@@ -91,6 +91,7 @@ input {
 }
 
 .card {
+    min-width: 0;
     border: 1px solid var(--line);
     border-radius: 24px;
     background: var(--surface);
@@ -122,6 +123,10 @@ input {
     display: grid;
     grid-template-columns: minmax(0, 1.2fr) minmax(300px, 0.8fr);
     gap: 24px;
+}
+
+.playground > * {
+    min-width: 0;
 }
 
 .panel-header {
@@ -238,16 +243,20 @@ input {
 }
 
 .side-grid {
+    min-width: 0;
     display: grid;
     gap: 18px;
 }
 
 .sample-list {
+    min-width: 0;
     display: grid;
     gap: 10px;
 }
 
 .sample-button {
+    width: 100%;
+    min-width: 0;
     text-align: left;
     padding: 14px 16px;
     border-radius: 18px;
@@ -264,6 +273,7 @@ input {
 .sample-button span {
     color: var(--muted);
     font-size: 0.94rem;
+    overflow-wrap: anywhere;
 }
 
 .code-block {

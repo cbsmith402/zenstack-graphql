@@ -7,6 +7,7 @@ import { serve } from '@hono/node-server';
 import { ZenStackClient } from '@zenstackhq/orm';
 import type { ClientContract } from '@zenstackhq/orm';
 import { SqliteDialect } from '@zenstackhq/orm/dialects/sqlite';
+import { PolicyPlugin } from '@zenstackhq/plugin-policy';
 import { createHonoHandler } from '@zenstackhq/server/hono';
 import {
     GraphQLNonNull,
@@ -28,6 +29,11 @@ const DEFAULT_DEMO_ROLE = 'admin';
 type DemoRole = 'admin' | 'user';
 type DemoClient = ClientContract<typeof schema>;
 type DemoGraphQLClient = DemoClient & { __graphqlRole?: DemoRole };
+type DemoAuthUser = {
+    id: number;
+    name: string;
+    role: 'ADMIN' | 'USER';
+};
 
 declare global {
     var __ZENSTACK_GRAPHQL_HONO_CLIENT__: DemoClient | undefined;
@@ -36,7 +42,7 @@ declare global {
 
 const sampleOperations = [
     {
-        label: 'Role-pruned Query',
+        label: 'Policy-filtered Query',
         query: `query RolePruned {
   users(order_by: [{ id: asc }]) {
     id
@@ -70,6 +76,11 @@ const sampleOperations = [
 }`,
     },
 ];
+
+const DEMO_AUTH_USERS: Record<DemoRole, DemoAuthUser> = {
+    admin: { id: 1, name: 'Ada', role: 'ADMIN' },
+    user: { id: 2, name: 'Ben', role: 'USER' },
+};
 
 const serverExtensions = {
     query: {
@@ -138,7 +149,9 @@ function getDemoClient() {
 }
 
 function createGraphQLClient(role: DemoRole): DemoGraphQLClient {
-    const client = getDemoClient();
+    const client = getDemoClient()
+        .$use(new PolicyPlugin())
+        .$setAuth(DEMO_AUTH_USERS[role]);
     return new Proxy(client as DemoGraphQLClient, {
         get(target, property, receiver) {
             if (property === '__graphqlRole') {
@@ -312,6 +325,7 @@ async function main() {
     app.get('/api/state', async (c) => {
         return c.json({
             databasePath: DATABASE_PATH,
+            demoActors: DEMO_AUTH_USERS,
             users: await getDemoSnapshot(),
         });
     });
