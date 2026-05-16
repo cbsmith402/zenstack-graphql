@@ -3,6 +3,10 @@ datasource db {
     url = env('DATABASE_URL')
 }
 
+plugin policy {
+    provider = '@zenstackhq/plugin-policy'
+}
+
 enum Role {
     USER
     ADMIN
@@ -16,6 +20,10 @@ model User {
     profile   Json?
     createdAt DateTime @default(now())
     posts     Post[]
+
+    @@allow('create', auth() != null && auth().role == ADMIN)
+    @@allow('read', auth() != null && (auth().role == ADMIN || auth().id == id))
+    @@allow('update,delete', auth() != null && (auth().role == ADMIN || auth().id == id))
 }
 
 model Post {
@@ -25,6 +33,10 @@ model Post {
     createdAt DateTime @default(now())
     author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
     authorId  Int
+
+    @@allow('read', auth() != null && (auth().role == ADMIN || auth().id == authorId))
+    @@allow('create', auth() != null && (auth().role == ADMIN || auth().id == authorId))
+    @@allow('update,delete', auth() != null && (auth().role == ADMIN || auth().id == authorId))
 }
 
 procedure getUserFeeds(userId: Int, limit: Int?) : Post[]

@@ -8,8 +8,9 @@ import {
     type SchemaSlicingConfig,
 } from 'zenstack-graphql';
 import { NextRequestHandler } from '@zenstackhq/server/next';
+import { PolicyPlugin } from '@zenstackhq/plugin-policy';
 
-import { ensureDemoDatabaseReady } from './zenstack-demo';
+import { DEMO_AUTH_USERS, ensureDemoDatabaseReady, getDemoClient } from './zenstack-demo';
 import { schema } from '@/zenstack/schema';
 
 export type DemoRole = 'admin' | 'user';
@@ -109,8 +110,15 @@ const graphQLApiHandler = new GraphQLApiHandler<
 export const graphqlSchemaFactory = createZenStackGraphQLSchemaFactory(schemaFactoryOptions);
 
 function createGraphQLClient(role: DemoRole): Promise<DemoGraphQLClient> {
-    return ensureDemoDatabaseReady().then((client) =>
-        new Proxy(client as DemoGraphQLClient, {
+    return ensureDemoDatabaseReady().then(() => {
+        const client = (
+            getDemoClient() as DemoClient & {
+                $use(plugin: unknown): { $setAuth(authUser: unknown): DemoClient };
+            }
+        )
+            .$use(new PolicyPlugin())
+            .$setAuth(DEMO_AUTH_USERS[role]);
+        return new Proxy(client as DemoGraphQLClient, {
             get(target, property, receiver) {
                 if (property === '__graphqlRole') {
                     return role;
@@ -119,8 +127,8 @@ function createGraphQLClient(role: DemoRole): Promise<DemoGraphQLClient> {
                 const value = Reflect.get(target, property, receiver);
                 return typeof value === 'function' ? value.bind(target) : value;
             },
-        })
-    );
+        });
+    });
 }
 
 export const nextGraphQLHandler = NextRequestHandler({

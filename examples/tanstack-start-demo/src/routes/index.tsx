@@ -74,7 +74,8 @@ function HomePage() {
                 <h1>Server routes meet Hasura-style GraphQL.</h1>
                 <p>
                     This app mounts `GraphQLApiHandler` through ZenStack&apos;s TanStack Start
-                    server adapter, backed by a real ZenStack + SQLite setup.
+                    server adapter, backed by a real ZenStack + SQLite setup with schema slicing
+                    and permission policies enabled.
                 </p>
             </section>
 
@@ -137,7 +138,7 @@ function HomePage() {
                     <h3>Current schema</h3>
                     <pre className="code">{schema}</pre>
 
-                    <h3>Current data</h3>
+                    <h3>Raw seed data</h3>
                     <pre className="code">{state}</pre>
                 </div>
             </section>

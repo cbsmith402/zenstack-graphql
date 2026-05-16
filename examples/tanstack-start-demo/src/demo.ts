@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { ZenStackClient } from '@zenstackhq/orm';
 import type { ClientContract } from '@zenstackhq/orm';
 import { SqliteDialect } from '@zenstackhq/orm/dialects/sqlite';
+import { PolicyPlugin } from '@zenstackhq/plugin-policy';
 import { TanStackStartHandler } from '@zenstackhq/server/tanstack-start';
 import {
     GraphQLNonNull,
@@ -26,6 +27,16 @@ export const DATABASE_PATH = path.join(process.cwd(), 'zenstack', 'dev.db');
 
 type DemoClient = ClientContract<typeof schema>;
 type DemoGraphQLClient = DemoClient & { __graphqlRole?: DemoRole };
+type DemoAuthUser = {
+    id: number;
+    name: string;
+    role: 'ADMIN' | 'USER';
+};
+
+const DEMO_AUTH_USERS: Record<DemoRole, DemoAuthUser> = {
+    admin: { id: 1, name: 'Ada', role: 'ADMIN' },
+    user: { id: 2, name: 'Ben', role: 'USER' },
+};
 declare global {
     var __ZENSTACK_GRAPHQL_TANSTACK_CLIENT__: DemoClient | undefined;
     var __ZENSTACK_GRAPHQL_TANSTACK_INIT__: Promise<void> | undefined;
@@ -123,7 +134,9 @@ function getDemoClient() {
 }
 
 function createGraphQLClient(role: DemoRole): DemoGraphQLClient {
-    const client = getDemoClient();
+    const client = getDemoClient()
+        .$use(new PolicyPlugin())
+        .$setAuth(DEMO_AUTH_USERS[role]);
     return new Proxy(client as DemoGraphQLClient, {
         get(target, property, receiver) {
             if (property === '__graphqlRole') {
@@ -226,6 +239,7 @@ export async function getDemoSnapshot() {
 
     return {
         databasePath: DATABASE_PATH,
+        demoActors: DEMO_AUTH_USERS,
         users,
     };
 }

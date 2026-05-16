@@ -11,6 +11,17 @@ import { schema } from '@/zenstack/schema';
 const DATABASE_PATH = path.join(process.cwd(), 'zenstack', 'dev.db');
 
 type DemoClient = ClientContract<typeof schema>;
+type DemoRole = 'admin' | 'user';
+type DemoAuthUser = {
+    id: number;
+    name: string;
+    role: 'ADMIN' | 'USER';
+};
+
+export const DEMO_AUTH_USERS: Record<DemoRole, DemoAuthUser> = {
+    admin: { id: 1, name: 'Ada', role: 'ADMIN' },
+    user: { id: 2, name: 'Ben', role: 'USER' },
+};
 
 declare global {
     var __ZENSTACK_GRAPHQL_DEMO_CLIENT__: DemoClient | undefined;
@@ -154,6 +165,7 @@ export async function getDemoSnapshot() {
 
     return {
         databasePath: DATABASE_PATH,
+        demoActors: DEMO_AUTH_USERS,
         users,
     };
 }
